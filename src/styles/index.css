@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100;
+  }
+
+  canvas {
+    @apply antialiased;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-colors duration-200;
+  }
+
+  .btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600;
+  }
+}
+
+.dark canvas {
+  filter: none !important;
+}
+
+.canvas-text {
+  @apply text-gray-900 dark:text-white;
+}
+
+.highlight {
+  @apply bg-yellow-200 dark:bg-yellow-900/50;
+}
+
+/* Estilos para el modo oscuro */
+.dark .canvas-container {
+  background-color: theme('colors.gray.900');
+}
+
+.dark .canvas-text {
+  color: theme('colors.white');
+}

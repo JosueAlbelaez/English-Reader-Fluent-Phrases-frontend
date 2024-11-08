@@ -1,0 +1,18 @@
+{
+    "title": "The Adventures of Sherlock Holmes",
+    "author": "Arthur Conan Doyle",
+    "image": "https://example.com/sherlock-holmes-cover.jpg",
+    "content": [
+      {
+        "pageNumber": 1,
+        "text": "To Sherlock Holmes she is always the woman. I have seldom heard him mention her under any other name."
+      },
+      {
+        "pageNumber": 2,
+        "text": "In his eyes she eclipses and predominates the whole of her sex. It was not that he felt any emotion akin to love for Irene Adler."
+      }
+    ],
+    "createdAt": "2024-10-25T19:30:00.000Z",
+    "updatedAt": "2024-10-25T19:30:00.000Z"
+  }
+  
