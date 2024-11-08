@@ -8,9 +8,10 @@ export const useTranslation = () => {
   const translateWord = useCallback(async (word) => {
     try {
       setLoading(true);
-      const response = await axios.post('http://localhost:5000/api/translation/translate', {
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/translation/translate`, {
         word,
       });
+      
       return response.data;
     } catch (err) {
       setError(err.message);

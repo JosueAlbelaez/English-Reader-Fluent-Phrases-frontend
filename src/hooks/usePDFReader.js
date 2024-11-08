@@ -13,11 +13,12 @@ export const usePDFReader = () => {
       const formData = new FormData();
       formData.append('pdf', file);
 
-      const response = await axios.post('http://localhost:5000/api/pdf/upload', formData, {
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/pdf/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
+      
 
       setPdfData(response.data.data);
       setAnnotations(response.data.data.annotations || []);
@@ -34,7 +35,7 @@ export const usePDFReader = () => {
   const addAnnotation = useCallback(async (pdfId, annotation) => {
     try {
       const response = await axios.post(
-        `http://localhost:5000/api/pdf/${pdfId}/annotations`,
+        `${import.meta.env.VITE_API_URL}/api/pdf/${pdfId}/annotations`,
         annotation
       );
       setAnnotations(response.data.annotations);
