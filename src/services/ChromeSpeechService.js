@@ -10,8 +10,6 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
-    this.chunkSize = this.isMobile ? 250 : Infinity;
-    this.currentChunk = 0;
     this.wordTimer = null;
   }
 
@@ -30,9 +28,10 @@ class ChromeSpeechService {
       }
 
       if (this.isMobile) {
-        const words = text.slice(startPosition).split(/\s+/);
-        this.speakWithWordTracking(text.slice(startPosition), words, rate);
+        // En móviles, usamos un enfoque más preciso
+        this.speakWithPreciseSync(text.slice(startPosition), rate);
       } else {
+        // En desktop mantenemos el comportamiento original que funciona bien
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
@@ -63,11 +62,9 @@ class ChromeSpeechService {
               if (this.onWordCallback) {
                 this.onWordCallback(null);
               }
-              
               if (this.onEndCallback) {
                 this.onEndCallback();
               }
-
               if (this.keepAliveInterval) {
                 clearInterval(this.keepAliveInterval);
               }
@@ -95,71 +92,75 @@ class ChromeSpeechService {
     }
   }
 
-  speakWithWordTracking(text, words, rate) {
-    this.utterance = new SpeechSynthesisUtterance(text);
-    this.utterance.lang = 'en-US';
-    this.utterance.rate = rate;
+  speakWithPreciseSync(text, rate) {
+    // Dividimos el texto en palabras manteniendo los espacios
+    const words = text.match(/\S+|\s+/g) || [];
+    let currentText = '';
+    let wordIndex = 0;
 
-    let currentWordIndex = 0;
-    let textUpToCurrentWord = '';
-    let startTime;
-
-    // Calcula el tiempo aproximado por palabra basado en la tasa de habla
-    const baseWordDuration = 200; // 200ms por palabra base
-    const adjustedWordDuration = baseWordDuration / rate;
-
-    this.utterance.onstart = () => {
-      startTime = Date.now();
-      
-      // Inicia el temporizador para actualizar las palabras
-      this.wordTimer = setInterval(() => {
-        if (this.isPaused || currentWordIndex >= words.length) {
-          clearInterval(this.wordTimer);
-          return;
-        }
-
-        const word = words[currentWordIndex];
-        textUpToCurrentWord += (currentWordIndex > 0 ? ' ' : '') + word;
-        
-        const wordStart = textUpToCurrentWord.length - word.length;
-        const wordEnd = textUpToCurrentWord.length;
-
-        if (this.onWordCallback) {
-          const wordInfo = {
-            word,
-            start: wordStart,
-            end: wordEnd
-          };
-          this.onWordCallback(wordInfo);
-        }
-
-        if (this.onProgressCallback) {
-          const progress = (textUpToCurrentWord.length / text.length) * 100;
-          this.onProgressCallback(Math.min(progress, 100));
-        }
-
-        currentWordIndex++;
-      }, adjustedWordDuration);
-    };
-
-    this.utterance.onend = () => {
-      clearInterval(this.wordTimer);
-      
-      if (!this.isPaused) {
-        if (this.onWordCallback) {
+    // Creamos un utterance para cada palabra
+    const speakNextWord = () => {
+      if (wordIndex >= words.length || this.isPaused) {
+        if (this.onEndCallback && wordIndex >= words.length) {
           this.onWordCallback(null);
-        }
-        if (this.onEndCallback) {
           this.onEndCallback();
         }
+        return;
+      }
+
+      const word = words[wordIndex];
+      const isSpace = /^\s+$/.test(word);
+
+      if (!isSpace) {
+        const utterance = new SpeechSynthesisUtterance(word);
+        utterance.lang = 'en-US';
+        utterance.rate = rate;
+
+        utterance.onstart = () => {
+          const start = currentText.length;
+          currentText += word;
+          const end = currentText.length;
+
+          if (this.onWordCallback) {
+            this.onWordCallback({
+              word: word.trim(),
+              start: start,
+              end: end
+            });
+          }
+
+          if (this.onProgressCallback) {
+            const progress = (currentText.length / text.length) * 100;
+            this.onProgressCallback(Math.min(progress, 100));
+          }
+        };
+
+        utterance.onend = () => {
+          if (!this.isPaused) {
+            wordIndex++;
+            if (wordIndex < words.length) {
+              // Si la siguiente entrada es un espacio, la saltamos
+              while (wordIndex < words.length && /^\s+$/.test(words[wordIndex])) {
+                currentText += words[wordIndex];
+                wordIndex++;
+              }
+              speakNextWord();
+            } else if (this.onEndCallback) {
+              this.onWordCallback(null);
+              this.onEndCallback();
+            }
+          }
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } else {
+        currentText += word;
+        wordIndex++;
+        speakNextWord();
       }
     };
 
-    this.utterance.onerror = () => {
-      clearInterval(this.wordTimer);
-    };
-
-    window.speechSynthesis.speak(this.utterance);
+    speakNextWord();
   }
 
   getCurrentWord(text, charIndex) {
