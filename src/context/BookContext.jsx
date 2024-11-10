@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import axios from 'axios';
 
 const BookContext = createContext();
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export const BookProvider = ({ children }) => {
   const [books, setBooks] = useState([]);
@@ -16,7 +17,7 @@ export const BookProvider = ({ children }) => {
     try {
       setLoading(true);
       console.log('Iniciando carga de libros...'); // Debug log
-      const response = await axios.get('http://localhost:5000/api/books');
+      const response = await axios.get(`${API_URL}/api/books`);
       console.log('Respuesta de la API:', response.data); // Debug log
       if (response.data.success) {
         setBooks(response.data.data);
@@ -40,7 +41,7 @@ export const BookProvider = ({ children }) => {
   const loadBook = useCallback(async (bookId) => {
     try {
       setLoading(true);
-      const response = await axios.get(`http://localhost:5000/api/books/${bookId}`);
+      const response = await axios.get(`${API_URL}/api/books/${bookId}`);
       if (response.data.success) {
         setCurrentBook(response.data.data);
         setCurrentPage(1);

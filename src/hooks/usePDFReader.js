@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { usePDF } from '../context/PDFContext';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 export const usePDFReader = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -13,7 +15,7 @@ export const usePDFReader = () => {
       const formData = new FormData();
       formData.append('pdf', file);
 
-      const response = await axios.post('http://localhost:5000/api/pdf/upload', formData, {
+      const response = await axios.post(`${API_URL}/api/pdf/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -34,7 +36,7 @@ export const usePDFReader = () => {
   const addAnnotation = useCallback(async (pdfId, annotation) => {
     try {
       const response = await axios.post(
-        `http://localhost:5000/api/pdf/${pdfId}/annotations`,
+        `${API_URL}/api/pdf/${pdfId}/annotations`,
         annotation
       );
       setAnnotations(response.data.annotations);
