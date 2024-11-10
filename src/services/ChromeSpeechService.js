@@ -10,8 +10,9 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
-    this.chunkSize = this.isMobile ? 250 : Infinity; // Tamaño más pequeño para móviles
+    this.chunkSize = this.isMobile ? 250 : Infinity;
     this.currentChunk = 0;
+    this.lastHighlightedWord = null;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -19,19 +20,17 @@ class ChromeSpeechService {
       this.text = text;
       this.currentPosition = startPosition;
       this.isPaused = false;
+      this.lastHighlightedWord = null;
 
-      // Cancelar cualquier reproducción anterior
       window.speechSynthesis.cancel();
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
       }
 
       if (this.isMobile) {
-        // En móviles, dividimos el texto en chunks más pequeños
         const chunks = this.chunkText(text.slice(startPosition));
         this.speakChunks(chunks, rate);
       } else {
-        // En desktop, mantenemos el comportamiento original
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
@@ -40,7 +39,6 @@ class ChromeSpeechService {
           try {
             if (event.name === 'word') {
               this.currentPosition = startPosition + (event.charIndex || 0);
-              
               const wordInfo = this.getCurrentWord(text, this.currentPosition);
               
               if (wordInfo && this.onWordCallback) {
@@ -95,7 +93,6 @@ class ChromeSpeechService {
     }
   }
 
-  // Nuevo método para dividir el texto en chunks
   chunkText(text) {
     const words = text.split(' ');
     const chunks = [];
@@ -113,11 +110,12 @@ class ChromeSpeechService {
     return chunks;
   }
 
-  // Nuevo método para hablar chunks secuencialmente
   speakChunks(chunks, rate) {
     let currentIndex = 0;
-    const totalLength = this.text.length;
     let accumulatedLength = 0;
+    const totalLength = this.text.length;
+    const words = this.text.split(' ');
+    let wordIndex = 0;
 
     const speakNextChunk = () => {
       if (currentIndex < chunks.length && !this.isPaused) {
@@ -126,39 +124,81 @@ class ChromeSpeechService {
         utterance.lang = 'en-US';
         utterance.rate = rate;
 
-        utterance.onboundary = (event) => {
-          if (event.name === 'word') {
-            this.currentPosition = accumulatedLength + (event.charIndex || 0);
-            const wordInfo = this.getCurrentWord(chunk, event.charIndex || 0);
-            
-            if (wordInfo) {
-              const adjustedWordInfo = {
-                ...wordInfo,
-                start: wordInfo.start + accumulatedLength,
-                end: wordInfo.end + accumulatedLength
+        // Calcular la duración aproximada por palabra
+        const wordsInChunk = chunk.split(' ').length;
+        const estimatedDurationPerWord = (chunk.length / rate) / wordsInChunk;
+
+        let wordTimer = null;
+        let currentWordIndex = 0;
+
+        const updateWord = () => {
+          if (this.isPaused) return;
+
+          const chunkWords = chunk.split(' ');
+          if (currentWordIndex < chunkWords.length) {
+            const word = chunkWords[currentWordIndex];
+            const start = chunk.indexOf(word);
+            const end = start + word.length;
+
+            const globalStart = accumulatedLength + start;
+            const globalEnd = accumulatedLength + end;
+
+            if (this.onWordCallback) {
+              const wordInfo = {
+                word,
+                start: globalStart,
+                end: globalEnd
               };
-              if (this.onWordCallback) {
-                this.onWordCallback(adjustedWordInfo);
+              
+              // Solo actualizar si es una palabra diferente
+              if (!this.lastHighlightedWord || 
+                  this.lastHighlightedWord.start !== wordInfo.start || 
+                  this.lastHighlightedWord.end !== wordInfo.end) {
+                this.lastHighlightedWord = wordInfo;
+                this.onWordCallback(wordInfo);
               }
             }
 
             if (this.onProgressCallback) {
-              const progress = (this.currentPosition / totalLength) * 100;
+              const progress = (globalEnd / totalLength) * 100;
               this.onProgressCallback(Math.min(progress, 100));
+            }
+
+            currentWordIndex++;
+            wordTimer = setTimeout(updateWord, estimatedDurationPerWord * 1000);
+          }
+        };
+
+        utterance.onstart = () => {
+          updateWord();
+        };
+
+        utterance.onend = () => {
+          if (wordTimer) {
+            clearTimeout(wordTimer);
+          }
+
+          if (!this.isPaused) {
+            accumulatedLength += chunk.length + 1;
+            currentIndex++;
+            
+            if (currentIndex < chunks.length) {
+              speakNextChunk();
+            } else {
+              if (this.onWordCallback) {
+                this.onWordCallback(null);
+              }
+              if (this.onEndCallback) {
+                this.onEndCallback();
+              }
             }
           }
         };
 
-        utterance.onend = () => {
-          if (!this.isPaused) {
-            accumulatedLength += chunk.length + 1; // +1 para el espacio
-            currentIndex++;
-            if (currentIndex < chunks.length) {
-              speakNextChunk();
-            } else if (this.onEndCallback) {
-              this.onWordCallback(null);
-              this.onEndCallback();
-            }
+        utterance.onerror = (error) => {
+          console.error('Error en utterance:', error);
+          if (wordTimer) {
+            clearTimeout(wordTimer);
           }
         };
 
@@ -240,6 +280,7 @@ class ChromeSpeechService {
       window.speechSynthesis.cancel();
       this.currentPosition = 0;
       this.utterance = null;
+      this.lastHighlightedWord = null;
       if (this.onWordCallback) {
         this.onWordCallback(null);
       }
