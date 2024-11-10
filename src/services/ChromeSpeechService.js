@@ -11,7 +11,7 @@ class ChromeSpeechService {
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
     this.wordTimer = null;
-    this.mobileWordTracker = null;
+    this.analyzerInterval = null;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -27,50 +27,61 @@ class ChromeSpeechService {
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
       }
-      if (this.mobileWordTracker) {
-        clearInterval(this.mobileWordTracker);
+      if (this.analyzerInterval) {
+        clearInterval(this.analyzerInterval);
       }
 
       if (this.isMobile) {
-        // Enfoque para móviles que mantiene la fluidez
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
 
-        // Preparar el tracking de palabras
-        const words = text.split(' ');
-        let positions = [];
-        let currentPos = 0;
+        // Pre-analizar el texto
+        const textSegments = text.slice(startPosition).split(/([.!?]+\s+|\n+)/g);
+        let segments = [];
+        let currentPosition = 0;
 
-        // Calcular las posiciones de cada palabra
-        words.forEach(word => {
-          const start = text.indexOf(word, currentPos);
-          const end = start + word.length;
-          positions.push({ word, start, end });
-          currentPos = end;
+        textSegments.forEach(segment => {
+          if (segment.trim()) {
+            const words = segment.trim().split(/\s+/);
+            const segmentStart = text.indexOf(segment, currentPosition);
+            const wordPositions = [];
+
+            let wordStart = segmentStart;
+            words.forEach(word => {
+              const start = text.indexOf(word, wordStart);
+              const end = start + word.length;
+              wordPositions.push({ word, start, end });
+              wordStart = end;
+            });
+
+            segments.push({
+              text: segment.trim(),
+              words: wordPositions,
+              start: segmentStart,
+              end: wordStart
+            });
+            currentPosition = wordStart;
+          }
         });
 
-        // Calcular la duración aproximada de cada palabra
-        const totalDuration = (text.length / rate) * 15; // Aproximadamente 15ms por carácter
-        const timePerWord = totalDuration / words.length;
-
-        let wordIndex = 0;
+        let currentSegmentIndex = 0;
+        let currentWordIndex = 0;
+        let segmentStartTime;
+        
         this.utterance.onstart = () => {
-          const startTime = Date.now();
+          segmentStartTime = Date.now();
+          
+          const processSegment = () => {
+            if (currentSegmentIndex >= segments.length) return;
 
-          // Tracker para el resaltado de palabras
-          this.mobileWordTracker = setInterval(() => {
-            if (this.isPaused || wordIndex >= positions.length) {
-              clearInterval(this.mobileWordTracker);
-              return;
-            }
+            const currentSegment = segments[currentSegmentIndex];
+            const wordsInSegment = currentSegment.words.length;
+            const segmentDuration = (currentSegment.text.length / rate) * 50; // Ajuste más lento para coincidir mejor con el audio
+            const wordDuration = segmentDuration / wordsInSegment;
 
-            const elapsedTime = Date.now() - startTime;
-            const expectedWordIndex = Math.floor(elapsedTime / timePerWord);
-
-            if (expectedWordIndex !== wordIndex && expectedWordIndex < positions.length) {
-              wordIndex = expectedWordIndex;
-              const wordInfo = positions[wordIndex];
+            if (currentWordIndex < currentSegment.words.length) {
+              const wordInfo = currentSegment.words[currentWordIndex];
               
               if (this.onWordCallback) {
                 this.onWordCallback(wordInfo);
@@ -80,12 +91,25 @@ class ChromeSpeechService {
                 const progress = (wordInfo.end / text.length) * 100;
                 this.onProgressCallback(Math.min(progress, 100));
               }
+
+              currentWordIndex++;
+              
+              // Programar la siguiente palabra
+              setTimeout(processSegment, wordDuration);
+            } else {
+              currentSegmentIndex++;
+              currentWordIndex = 0;
+              segmentStartTime = Date.now();
+              
+              // Pequeña pausa entre segmentos para naturalidad
+              setTimeout(processSegment, 100);
             }
-          }, 50); // Actualizar cada 50ms para suavidad
+          };
+
+          processSegment();
         };
 
         this.utterance.onend = () => {
-          clearInterval(this.mobileWordTracker);
           if (!this.isPaused) {
             if (this.onWordCallback) {
               this.onWordCallback(null);
@@ -97,9 +121,8 @@ class ChromeSpeechService {
         };
 
         window.speechSynthesis.speak(this.utterance);
-
       } else {
-        // Comportamiento original para desktop que funciona bien
+        // Mantener el comportamiento original para desktop
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
@@ -202,8 +225,8 @@ class ChromeSpeechService {
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
       }
-      if (this.mobileWordTracker) {
-        clearInterval(this.mobileWordTracker);
+      if (this.analyzerInterval) {
+        clearInterval(this.analyzerInterval);
       }
     } catch (error) {
       console.error('Error en pause:', error);
@@ -246,8 +269,8 @@ class ChromeSpeechService {
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
       }
-      if (this.mobileWordTracker) {
-        clearInterval(this.mobileWordTracker);
+      if (this.analyzerInterval) {
+        clearInterval(this.analyzerInterval);
       }
     } catch (error) {
       console.error('Error en stop:', error);
