@@ -11,6 +11,7 @@ class ChromeSpeechService {
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
     this.wordTimer = null;
+    this.mobileWordTracker = null;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -26,12 +27,79 @@ class ChromeSpeechService {
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
       }
+      if (this.mobileWordTracker) {
+        clearInterval(this.mobileWordTracker);
+      }
 
       if (this.isMobile) {
-        // En móviles, usamos un enfoque más preciso
-        this.speakWithPreciseSync(text.slice(startPosition), rate);
+        // Enfoque para móviles que mantiene la fluidez
+        this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
+        this.utterance.lang = 'en-US';
+        this.utterance.rate = rate;
+
+        // Preparar el tracking de palabras
+        const words = text.split(' ');
+        let positions = [];
+        let currentPos = 0;
+
+        // Calcular las posiciones de cada palabra
+        words.forEach(word => {
+          const start = text.indexOf(word, currentPos);
+          const end = start + word.length;
+          positions.push({ word, start, end });
+          currentPos = end;
+        });
+
+        // Calcular la duración aproximada de cada palabra
+        const totalDuration = (text.length / rate) * 15; // Aproximadamente 15ms por carácter
+        const timePerWord = totalDuration / words.length;
+
+        let wordIndex = 0;
+        this.utterance.onstart = () => {
+          const startTime = Date.now();
+
+          // Tracker para el resaltado de palabras
+          this.mobileWordTracker = setInterval(() => {
+            if (this.isPaused || wordIndex >= positions.length) {
+              clearInterval(this.mobileWordTracker);
+              return;
+            }
+
+            const elapsedTime = Date.now() - startTime;
+            const expectedWordIndex = Math.floor(elapsedTime / timePerWord);
+
+            if (expectedWordIndex !== wordIndex && expectedWordIndex < positions.length) {
+              wordIndex = expectedWordIndex;
+              const wordInfo = positions[wordIndex];
+              
+              if (this.onWordCallback) {
+                this.onWordCallback(wordInfo);
+              }
+
+              if (this.onProgressCallback) {
+                const progress = (wordInfo.end / text.length) * 100;
+                this.onProgressCallback(Math.min(progress, 100));
+              }
+            }
+          }, 50); // Actualizar cada 50ms para suavidad
+        };
+
+        this.utterance.onend = () => {
+          clearInterval(this.mobileWordTracker);
+          if (!this.isPaused) {
+            if (this.onWordCallback) {
+              this.onWordCallback(null);
+            }
+            if (this.onEndCallback) {
+              this.onEndCallback();
+            }
+          }
+        };
+
+        window.speechSynthesis.speak(this.utterance);
+
       } else {
-        // En desktop mantenemos el comportamiento original que funciona bien
+        // Comportamiento original para desktop que funciona bien
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
@@ -92,77 +160,6 @@ class ChromeSpeechService {
     }
   }
 
-  speakWithPreciseSync(text, rate) {
-    // Dividimos el texto en palabras manteniendo los espacios
-    const words = text.match(/\S+|\s+/g) || [];
-    let currentText = '';
-    let wordIndex = 0;
-
-    // Creamos un utterance para cada palabra
-    const speakNextWord = () => {
-      if (wordIndex >= words.length || this.isPaused) {
-        if (this.onEndCallback && wordIndex >= words.length) {
-          this.onWordCallback(null);
-          this.onEndCallback();
-        }
-        return;
-      }
-
-      const word = words[wordIndex];
-      const isSpace = /^\s+$/.test(word);
-
-      if (!isSpace) {
-        const utterance = new SpeechSynthesisUtterance(word);
-        utterance.lang = 'en-US';
-        utterance.rate = rate;
-
-        utterance.onstart = () => {
-          const start = currentText.length;
-          currentText += word;
-          const end = currentText.length;
-
-          if (this.onWordCallback) {
-            this.onWordCallback({
-              word: word.trim(),
-              start: start,
-              end: end
-            });
-          }
-
-          if (this.onProgressCallback) {
-            const progress = (currentText.length / text.length) * 100;
-            this.onProgressCallback(Math.min(progress, 100));
-          }
-        };
-
-        utterance.onend = () => {
-          if (!this.isPaused) {
-            wordIndex++;
-            if (wordIndex < words.length) {
-              // Si la siguiente entrada es un espacio, la saltamos
-              while (wordIndex < words.length && /^\s+$/.test(words[wordIndex])) {
-                currentText += words[wordIndex];
-                wordIndex++;
-              }
-              speakNextWord();
-            } else if (this.onEndCallback) {
-              this.onWordCallback(null);
-              this.onEndCallback();
-            }
-          }
-        };
-
-        window.speechSynthesis.speak(utterance);
-      } else {
-        currentText += word;
-        wordIndex++;
-        speakNextWord();
-      }
-    };
-
-    speakNextWord();
-  }
-
   getCurrentWord(text, charIndex) {
     try {
       if (!text || typeof charIndex !== 'number') return null;
@@ -205,6 +202,9 @@ class ChromeSpeechService {
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
       }
+      if (this.mobileWordTracker) {
+        clearInterval(this.mobileWordTracker);
+      }
     } catch (error) {
       console.error('Error en pause:', error);
     }
@@ -245,6 +245,9 @@ class ChromeSpeechService {
       }
       if (this.wordTimer) {
         clearInterval(this.wordTimer);
+      }
+      if (this.mobileWordTracker) {
+        clearInterval(this.mobileWordTracker);
       }
     } catch (error) {
       console.error('Error en stop:', error);
