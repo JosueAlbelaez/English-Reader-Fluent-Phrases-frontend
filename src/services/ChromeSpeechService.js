@@ -12,7 +12,7 @@ class ChromeSpeechService {
     this.keepAliveInterval = null;
     this.chunkSize = this.isMobile ? 250 : Infinity;
     this.currentChunk = 0;
-    this.lastHighlightedWord = null;
+    this.wordTimer = null;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -20,16 +20,18 @@ class ChromeSpeechService {
       this.text = text;
       this.currentPosition = startPosition;
       this.isPaused = false;
-      this.lastHighlightedWord = null;
 
       window.speechSynthesis.cancel();
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
       }
+      if (this.wordTimer) {
+        clearInterval(this.wordTimer);
+      }
 
       if (this.isMobile) {
-        const chunks = this.chunkText(text.slice(startPosition));
-        this.speakChunks(chunks, rate);
+        const words = text.slice(startPosition).split(/\s+/);
+        this.speakWithWordTracking(text.slice(startPosition), words, rate);
       } else {
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
@@ -93,120 +95,71 @@ class ChromeSpeechService {
     }
   }
 
-  chunkText(text) {
-    const words = text.split(' ');
-    const chunks = [];
-    let currentChunk = '';
+  speakWithWordTracking(text, words, rate) {
+    this.utterance = new SpeechSynthesisUtterance(text);
+    this.utterance.lang = 'en-US';
+    this.utterance.rate = rate;
 
-    for (const word of words) {
-      if ((currentChunk + ' ' + word).length <= this.chunkSize) {
-        currentChunk += (currentChunk ? ' ' : '') + word;
-      } else {
-        if (currentChunk) chunks.push(currentChunk);
-        currentChunk = word;
-      }
-    }
-    if (currentChunk) chunks.push(currentChunk);
-    return chunks;
-  }
+    let currentWordIndex = 0;
+    let textUpToCurrentWord = '';
+    let startTime;
 
-  speakChunks(chunks, rate) {
-    let currentIndex = 0;
-    let accumulatedLength = 0;
-    const totalLength = this.text.length;
-    const words = this.text.split(' ');
-    let wordIndex = 0;
+    // Calcula el tiempo aproximado por palabra basado en la tasa de habla
+    const baseWordDuration = 200; // 200ms por palabra base
+    const adjustedWordDuration = baseWordDuration / rate;
 
-    const speakNextChunk = () => {
-      if (currentIndex < chunks.length && !this.isPaused) {
-        const chunk = chunks[currentIndex];
-        const utterance = new SpeechSynthesisUtterance(chunk);
-        utterance.lang = 'en-US';
-        utterance.rate = rate;
+    this.utterance.onstart = () => {
+      startTime = Date.now();
+      
+      // Inicia el temporizador para actualizar las palabras
+      this.wordTimer = setInterval(() => {
+        if (this.isPaused || currentWordIndex >= words.length) {
+          clearInterval(this.wordTimer);
+          return;
+        }
 
-        // Calcular la duración aproximada por palabra
-        const wordsInChunk = chunk.split(' ').length;
-        const estimatedDurationPerWord = (chunk.length / rate) / wordsInChunk;
+        const word = words[currentWordIndex];
+        textUpToCurrentWord += (currentWordIndex > 0 ? ' ' : '') + word;
+        
+        const wordStart = textUpToCurrentWord.length - word.length;
+        const wordEnd = textUpToCurrentWord.length;
 
-        let wordTimer = null;
-        let currentWordIndex = 0;
+        if (this.onWordCallback) {
+          const wordInfo = {
+            word,
+            start: wordStart,
+            end: wordEnd
+          };
+          this.onWordCallback(wordInfo);
+        }
 
-        const updateWord = () => {
-          if (this.isPaused) return;
+        if (this.onProgressCallback) {
+          const progress = (textUpToCurrentWord.length / text.length) * 100;
+          this.onProgressCallback(Math.min(progress, 100));
+        }
 
-          const chunkWords = chunk.split(' ');
-          if (currentWordIndex < chunkWords.length) {
-            const word = chunkWords[currentWordIndex];
-            const start = chunk.indexOf(word);
-            const end = start + word.length;
+        currentWordIndex++;
+      }, adjustedWordDuration);
+    };
 
-            const globalStart = accumulatedLength + start;
-            const globalEnd = accumulatedLength + end;
-
-            if (this.onWordCallback) {
-              const wordInfo = {
-                word,
-                start: globalStart,
-                end: globalEnd
-              };
-              
-              // Solo actualizar si es una palabra diferente
-              if (!this.lastHighlightedWord || 
-                  this.lastHighlightedWord.start !== wordInfo.start || 
-                  this.lastHighlightedWord.end !== wordInfo.end) {
-                this.lastHighlightedWord = wordInfo;
-                this.onWordCallback(wordInfo);
-              }
-            }
-
-            if (this.onProgressCallback) {
-              const progress = (globalEnd / totalLength) * 100;
-              this.onProgressCallback(Math.min(progress, 100));
-            }
-
-            currentWordIndex++;
-            wordTimer = setTimeout(updateWord, estimatedDurationPerWord * 1000);
-          }
-        };
-
-        utterance.onstart = () => {
-          updateWord();
-        };
-
-        utterance.onend = () => {
-          if (wordTimer) {
-            clearTimeout(wordTimer);
-          }
-
-          if (!this.isPaused) {
-            accumulatedLength += chunk.length + 1;
-            currentIndex++;
-            
-            if (currentIndex < chunks.length) {
-              speakNextChunk();
-            } else {
-              if (this.onWordCallback) {
-                this.onWordCallback(null);
-              }
-              if (this.onEndCallback) {
-                this.onEndCallback();
-              }
-            }
-          }
-        };
-
-        utterance.onerror = (error) => {
-          console.error('Error en utterance:', error);
-          if (wordTimer) {
-            clearTimeout(wordTimer);
-          }
-        };
-
-        window.speechSynthesis.speak(utterance);
+    this.utterance.onend = () => {
+      clearInterval(this.wordTimer);
+      
+      if (!this.isPaused) {
+        if (this.onWordCallback) {
+          this.onWordCallback(null);
+        }
+        if (this.onEndCallback) {
+          this.onEndCallback();
+        }
       }
     };
 
-    speakNextChunk();
+    this.utterance.onerror = () => {
+      clearInterval(this.wordTimer);
+    };
+
+    window.speechSynthesis.speak(this.utterance);
   }
 
   getCurrentWord(text, charIndex) {
@@ -248,6 +201,9 @@ class ChromeSpeechService {
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
       }
+      if (this.wordTimer) {
+        clearInterval(this.wordTimer);
+      }
     } catch (error) {
       console.error('Error en pause:', error);
     }
@@ -280,12 +236,14 @@ class ChromeSpeechService {
       window.speechSynthesis.cancel();
       this.currentPosition = 0;
       this.utterance = null;
-      this.lastHighlightedWord = null;
       if (this.onWordCallback) {
         this.onWordCallback(null);
       }
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
+      }
+      if (this.wordTimer) {
+        clearInterval(this.wordTimer);
       }
     } catch (error) {
       console.error('Error en stop:', error);
