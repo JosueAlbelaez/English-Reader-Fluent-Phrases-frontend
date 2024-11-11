@@ -13,6 +13,9 @@ class ChromeSpeechService {
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
+   this.wordPositions = [];
+   this.currentWordIndex = 0;
+   this.highlightInterval = null;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -27,7 +30,7 @@ class ChromeSpeechService {
        lang: 'en-US',
        rate: 1,
        pitch: 1,
-       splitSentences: true,
+       splitSentences: false,
        listeners: {
          onvoiceschanged: voices => {
            console.log("Voces disponibles:", voices);
@@ -52,78 +55,102 @@ class ChromeSpeechService {
      if (this.isMobile && this.mobileSpeech) {
        // Detener cualquier reproducción anterior
        this.mobileSpeech.cancel();
+       if (this.highlightInterval) {
+         clearInterval(this.highlightInterval);
+       }
 
-       // Preparar el texto y las palabras para el seguimiento
-       const textToSpeak = text.slice(startPosition);
-       const words = textToSpeak.split(/\s+/);
+       // Preparar el mapeo de palabras
+       this.wordPositions = [];
        let currentPos = startPosition;
-       const wordPositions = words.map(word => {
+       const textToProcess = text.slice(startPosition);
+       
+       // Mejorado el algoritmo de separación de palabras
+       const words = textToProcess.match(/\S+/g) || [];
+       
+       words.forEach(word => {
          const start = text.indexOf(word, currentPos);
          const end = start + word.length;
-         currentPos = end;
-         return { word, start, end };
+         this.wordPositions.push({ word, start, end });
+         currentPos = end + 1;
        });
 
-       let currentWordIndex = 0;
+       this.currentWordIndex = 0;
+       const startingWordIndex = this.wordPositions.findIndex(wp => wp.start >= startPosition);
+       if (startingWordIndex !== -1) {
+         this.currentWordIndex = startingWordIndex;
+       }
 
        // Configurar la velocidad
        this.mobileSpeech.setRate(rate);
 
-       // Configurar los listeners
-       this.mobileSpeech.setLanguage('en-US');
-       
-       // Dividir en oraciones para mejor control
-       const sentences = textToSpeak.match(/[^.!?]+[.!?]+/g) || [textToSpeak];
-       
-       const speakNextSentence = async (index) => {
-         if (index >= sentences.length || this.isPaused) return;
-
-         const sentence = sentences[index];
-         const sentenceStart = text.indexOf(sentence, currentPos);
-         
-         await this.mobileSpeech.speak({
-           text: sentence,
-           queue: false,
-           listeners: {
-             onstart: () => {
-               console.log("Iniciando oración:", index + 1);
-             },
-             onboundary: (event) => {
-               if (!this.isPaused) {
-                 const charIndex = sentenceStart + (event.charIndex || 0);
-                 const wordInfo = wordPositions.find(wp => 
-                   charIndex >= wp.start && charIndex <= wp.end
-                 );
-
-                 if (wordInfo && this.onWordCallback) {
-                   this.onWordCallback({
-                     word: wordInfo.word,
-                     start: wordInfo.start,
-                     end: wordInfo.end
-                   });
-                   this.currentPosition = wordInfo.start;
-                 }
-
-                 if (this.onProgressCallback) {
-                   const progress = (charIndex / text.length) * 100;
-                   this.onProgressCallback(Math.min(progress, 100));
-                 }
-               }
-             },
-             onend: () => {
-               if (!this.isPaused) {
-                 currentPos = sentenceStart + sentence.length;
-                 speakNextSentence(index + 1);
-               }
-             },
-             onerror: (error) => {
-               console.error("Error en speech:", error);
-             }
+       // Función para resaltar palabras
+       const highlightWords = () => {
+         if (this.currentWordIndex < this.wordPositions.length && !this.isPaused) {
+           const currentWord = this.wordPositions[this.currentWordIndex];
+           if (this.onWordCallback) {
+             this.onWordCallback({
+               word: currentWord.word,
+               start: currentWord.start,
+               end: currentWord.end
+             });
            }
-         });
+
+           if (this.onProgressCallback) {
+             const progress = (currentWord.end / text.length) * 100;
+             this.onProgressCallback(Math.min(progress, 100));
+           }
+         }
        };
 
-       await speakNextSentence(0);
+       // Iniciar la reproducción
+       await this.mobileSpeech.speak({
+         text: textToProcess,
+         queue: false,
+         listeners: {
+           onstart: () => {
+             // Iniciar el resaltado de palabras
+             this.highlightInterval = setInterval(() => {
+               if (!this.isPaused) {
+                 highlightWords();
+                 this.currentWordIndex++;
+               }
+             }, rate === 1 ? 300 : 450); // Ajustar intervalo según la velocidad
+           },
+           onend: () => {
+             if (!this.isPaused) {
+               if (this.highlightInterval) {
+                 clearInterval(this.highlightInterval);
+               }
+               if (this.onWordCallback) {
+                 this.onWordCallback(null);
+               }
+               if (this.onEndCallback) {
+                 this.onEndCallback();
+               }
+               this.currentWordIndex = 0;
+             }
+           },
+           onpause: () => {
+             if (this.highlightInterval) {
+               clearInterval(this.highlightInterval);
+             }
+           },
+           onresume: () => {
+             this.highlightInterval = setInterval(() => {
+               if (!this.isPaused) {
+                 highlightWords();
+                 this.currentWordIndex++;
+               }
+             }, rate === 1 ? 300 : 450);
+           },
+           onerror: (error) => {
+             console.error("Error en speech:", error);
+             if (this.highlightInterval) {
+               clearInterval(this.highlightInterval);
+             }
+           }
+         }
+       });
 
      } else {
        // Mantener el comportamiento original para desktop que funciona perfectamente
@@ -226,6 +253,9 @@ class ChromeSpeechService {
      this.isPaused = true;
      if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.pause();
+       if (this.highlightInterval) {
+         clearInterval(this.highlightInterval);
+       }
      } else {
        window.speechSynthesis.pause();
        if (this.onWordCallback) {
@@ -268,10 +298,14 @@ class ChromeSpeechService {
      this.isPaused = false;
      if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.cancel();
+       if (this.highlightInterval) {
+         clearInterval(this.highlightInterval);
+       }
      } else {
        window.speechSynthesis.cancel();
      }
      this.currentPosition = 0;
+     this.currentWordIndex = 0;
      this.utterance = null;
      if (this.onWordCallback) {
        this.onWordCallback(null);
