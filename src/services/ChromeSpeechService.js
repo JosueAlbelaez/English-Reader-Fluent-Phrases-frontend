@@ -11,6 +11,7 @@ class ChromeSpeechService {
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
     this.mobileHighlightInterval = null;
+    this.lastWordIndex = 0;
   }
  
   speak(text, startPosition = 0, rate = 1.0) {
@@ -28,7 +29,6 @@ class ChromeSpeechService {
       }
  
       if (this.isMobile) {
-        // Nueva implementación para móviles
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
@@ -47,24 +47,24 @@ class ChromeSpeechService {
           }
         }
  
-        let currentWordIndex = 0;
-        const baseDelay = 750 / rate; // Aumentado de 250 a 750 para un resaltado más lento
+        let currentWordIndex = this.lastWordIndex;
+        const baseDelay = 400 / rate;
  
-        this.utterance.onstart = () => {
+        const startHighlighting = () => {
           this.mobileHighlightInterval = setInterval(() => {
             if (!this.isPaused && currentWordIndex < wordData.length) {
               const currentWord = wordData[currentWordIndex];
-              
-              // Calcular delay basado en la longitud de la palabra
               const wordLength = currentWord.word.length;
-              const wordDelay = baseDelay * (wordLength / 3);
-              
+              const wordDelay = baseDelay * (wordLength / 4);
+ 
               if (this.onWordCallback) {
                 this.onWordCallback({
                   word: currentWord.word,
                   start: currentWord.start,
                   end: currentWord.end
                 });
+                this.currentPosition = currentWord.start;
+                this.lastWordIndex = currentWordIndex;
               }
  
               if (this.onProgressCallback) {
@@ -74,7 +74,6 @@ class ChromeSpeechService {
  
               currentWordIndex++;
               
-              // Ajustar el intervalo según la longitud de la palabra
               if (this.mobileHighlightInterval) {
                 clearInterval(this.mobileHighlightInterval);
               }
@@ -82,14 +81,14 @@ class ChromeSpeechService {
               this.mobileHighlightInterval = setInterval(() => {
                 if (!this.isPaused && currentWordIndex < wordData.length) {
                   const nextWord = wordData[currentWordIndex];
-                  const nextWordDelay = baseDelay * (nextWord.word.length / 3);
-                  
                   if (this.onWordCallback) {
                     this.onWordCallback({
                       word: nextWord.word,
                       start: nextWord.start,
                       end: nextWord.end
                     });
+                    this.currentPosition = nextWord.start;
+                    this.lastWordIndex = currentWordIndex;
                   }
  
                   if (this.onProgressCallback) {
@@ -104,6 +103,10 @@ class ChromeSpeechService {
           }, baseDelay);
         };
  
+        this.utterance.onstart = () => {
+          startHighlighting();
+        };
+ 
         this.utterance.onend = () => {
           if (this.mobileHighlightInterval) {
             clearInterval(this.mobileHighlightInterval);
@@ -115,6 +118,7 @@ class ChromeSpeechService {
             if (this.onEndCallback) {
               this.onEndCallback();
             }
+            this.lastWordIndex = 0;
           }
         };
  
@@ -125,32 +129,7 @@ class ChromeSpeechService {
         };
  
         this.utterance.onresume = () => {
-          if (!this.isPaused && currentWordIndex < wordData.length) {
-            const currentWord = wordData[currentWordIndex];
-            const wordDelay = baseDelay * (currentWord.word.length / 3);
-            
-            this.mobileHighlightInterval = setInterval(() => {
-              if (!this.isPaused && currentWordIndex < wordData.length) {
-                const nextWord = wordData[currentWordIndex];
-                const nextWordDelay = baseDelay * (nextWord.word.length / 3);
-                
-                if (this.onWordCallback) {
-                  this.onWordCallback({
-                    word: nextWord.word,
-                    start: nextWord.start,
-                    end: nextWord.end
-                  });
-                }
- 
-                if (this.onProgressCallback) {
-                  const progress = (nextWord.end / text.length) * 100;
-                  this.onProgressCallback(Math.min(progress, 100));
-                }
- 
-                currentWordIndex++;
-              }
-            }, wordDelay);
-          }
+          startHighlighting();
         };
  
         window.speechSynthesis.speak(this.utterance);
@@ -300,6 +279,7 @@ class ChromeSpeechService {
       if (this.mobileHighlightInterval) {
         clearInterval(this.mobileHighlightInterval);
       }
+      this.lastWordIndex = 0;
     } catch (error) {
       console.error('Error en stop:', error);
     }
