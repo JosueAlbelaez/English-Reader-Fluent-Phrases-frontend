@@ -1,4 +1,4 @@
-import Tts from 'react-native-tts';
+import Speech from 'speak-tts';
 
 class ChromeSpeechService {
  constructor() {
@@ -12,42 +12,34 @@ class ChromeSpeechService {
    this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
-   this.currentWordIndex = 0;
-   this.ttsInitialized = false;
+   this.mobileSpeech = null;
 
    if (this.isMobile) {
-     this.initializeTts();
+     this.initializeMobileSpeech();
    }
  }
 
- async initializeTts() {
-   if (!this.ttsInitialized) {
-     try {
-       await Tts.getInitStatus();
-       Tts.setDefaultLanguage('en-US');
-       Tts.setDefaultRate(0.75);
-       Tts.setDefaultPitch(1.0);
-
-       Tts.addEventListener('tts-start', () => {
-         console.log('TTS iniciado');
-         this.currentWordIndex = 0;
-       });
-
-       Tts.addEventListener('tts-finish', () => {
-         if (!this.isPaused && this.onEndCallback) {
-           this.onWordCallback(null);
-           this.onEndCallback();
+ async initializeMobileSpeech() {
+   try {
+     this.mobileSpeech = new Speech();
+     const speechStatus = await this.mobileSpeech.init({
+       volume: 1,
+       lang: 'en-US',
+       rate: 1,
+       pitch: 1,
+       splitSentences: true,
+       listeners: {
+         onvoiceschanged: voices => {
+           console.log("Voces disponibles:", voices);
          }
-       });
+       }
+     });
 
-       Tts.addEventListener('tts-cancel', () => {
-         this.onWordCallback(null);
-       });
-
-       this.ttsInitialized = true;
-     } catch (error) {
-       console.error('Error inicializando TTS:', error);
+     if (speechStatus) {
+       console.log("Speech está listo!");
      }
+   } catch (error) {
+     console.error("Error inicializando speech:", error);
    }
  }
 
@@ -57,89 +49,81 @@ class ChromeSpeechService {
      this.currentPosition = startPosition;
      this.isPaused = false;
 
-     if (this.isMobile) {
-       if (!this.ttsInitialized) {
-         await this.initializeTts();
-       }
+     if (this.isMobile && this.mobileSpeech) {
+       // Detener cualquier reproducción anterior
+       this.mobileSpeech.cancel();
 
-       Tts.stop();
-
-       // Preprocesar el texto para identificar palabras y sus posiciones
-       const words = text.slice(startPosition).split(/\s+/);
-       const wordPositions = [];
+       // Preparar el texto y las palabras para el seguimiento
+       const textToSpeak = text.slice(startPosition);
+       const words = textToSpeak.split(/\s+/);
        let currentPos = startPosition;
+       const wordPositions = words.map(word => {
+         const start = text.indexOf(word, currentPos);
+         const end = start + word.length;
+         currentPos = end;
+         return { word, start, end };
+       });
 
-       for (const word of words) {
-         if (word.trim()) {
-           const start = text.indexOf(word, currentPos);
-           const end = start + word.length;
-           wordPositions.push({ word, start, end });
-           currentPos = end;
-         }
-       }
+       let currentWordIndex = 0;
 
        // Configurar la velocidad
-       await Tts.setDefaultRate(rate);
+       this.mobileSpeech.setRate(rate);
 
-       // Dividir el texto en frases más manejables
-       const sentences = text.slice(startPosition).match(/[^.!?]+[.!?]+/g) || [text.slice(startPosition)];
+       // Configurar los listeners
+       this.mobileSpeech.setLanguage('en-US');
        
-       let currentSentenceIndex = 0;
+       // Dividir en oraciones para mejor control
+       const sentences = textToSpeak.match(/[^.!?]+[.!?]+/g) || [textToSpeak];
+       
+       const speakNextSentence = async (index) => {
+         if (index >= sentences.length || this.isPaused) return;
 
-       const speakNextSentence = async () => {
-         if (currentSentenceIndex < sentences.length && !this.isPaused) {
-           const currentSentence = sentences[currentSentenceIndex];
-           
-           await Tts.speak(currentSentence, {
-             rate: rate,
-             onStart: () => {
-               console.log('Iniciando frase:', currentSentenceIndex + 1);
+         const sentence = sentences[index];
+         const sentenceStart = text.indexOf(sentence, currentPos);
+         
+         await this.mobileSpeech.speak({
+           text: sentence,
+           queue: false,
+           listeners: {
+             onstart: () => {
+               console.log("Iniciando oración:", index + 1);
              },
-             onProgress: (event) => {
+             onboundary: (event) => {
                if (!this.isPaused) {
-                 const { location, length } = event;
-                 // Calcular la posición global en el texto
-                 const globalPosition = startPosition + 
-                   sentences.slice(0, currentSentenceIndex).join('').length + 
-                   location;
-
-                 // Encontrar la palabra actual
-                 const currentWord = wordPositions.find(wp => 
-                   globalPosition >= wp.start && globalPosition <= wp.end
+                 const charIndex = sentenceStart + (event.charIndex || 0);
+                 const wordInfo = wordPositions.find(wp => 
+                   charIndex >= wp.start && charIndex <= wp.end
                  );
 
-                 if (currentWord && this.onWordCallback) {
+                 if (wordInfo && this.onWordCallback) {
                    this.onWordCallback({
-                     word: currentWord.word,
-                     start: currentWord.start,
-                     end: currentWord.end
+                     word: wordInfo.word,
+                     start: wordInfo.start,
+                     end: wordInfo.end
                    });
-                   this.currentPosition = currentWord.start;
+                   this.currentPosition = wordInfo.start;
                  }
 
                  if (this.onProgressCallback) {
-                   const progress = (globalPosition / text.length) * 100;
+                   const progress = (charIndex / text.length) * 100;
                    this.onProgressCallback(Math.min(progress, 100));
                  }
                }
              },
-             onDone: () => {
+             onend: () => {
                if (!this.isPaused) {
-                 currentSentenceIndex++;
-                 speakNextSentence();
+                 currentPos = sentenceStart + sentence.length;
+                 speakNextSentence(index + 1);
                }
              },
-             onError: (error) => {
-               console.error('Error en TTS:', error);
+             onerror: (error) => {
+               console.error("Error en speech:", error);
              }
-           });
-         } else if (!this.isPaused && this.onEndCallback) {
-           this.onWordCallback(null);
-           this.onEndCallback();
-         }
+           }
+         });
        };
 
-       speakNextSentence();
+       await speakNextSentence(0);
 
      } else {
        // Mantener el comportamiento original para desktop que funciona perfectamente
@@ -240,8 +224,8 @@ class ChromeSpeechService {
  pause() {
    try {
      this.isPaused = true;
-     if (this.isMobile) {
-       Tts.pause();
+     if (this.isMobile && this.mobileSpeech) {
+       this.mobileSpeech.pause();
      } else {
        window.speechSynthesis.pause();
        if (this.onWordCallback) {
@@ -260,8 +244,8 @@ class ChromeSpeechService {
    try {
      if (this.isPaused) {
        this.isPaused = false;
-       if (this.isMobile) {
-         Tts.resume();
+       if (this.isMobile && this.mobileSpeech) {
+         this.mobileSpeech.resume();
        } else {
          window.speechSynthesis.resume();
          if (this.isChrome) {
@@ -282,13 +266,12 @@ class ChromeSpeechService {
  stop() {
    try {
      this.isPaused = false;
-     if (this.isMobile) {
-       Tts.stop();
+     if (this.isMobile && this.mobileSpeech) {
+       this.mobileSpeech.cancel();
      } else {
        window.speechSynthesis.cancel();
      }
      this.currentPosition = 0;
-     this.currentWordIndex = 0;
      this.utterance = null;
      if (this.onWordCallback) {
        this.onWordCallback(null);
