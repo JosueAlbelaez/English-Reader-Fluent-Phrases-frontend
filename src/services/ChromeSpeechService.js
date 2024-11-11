@@ -51,7 +51,7 @@ class ChromeSpeechService {
    }
  }
 
- speak = async (text, startPosition = 0, rate = 1.0)=> {
+ async speak(text, startPosition = 0, rate = 1.0) {
    try {
      this.text = text;
      this.currentPosition = startPosition;
