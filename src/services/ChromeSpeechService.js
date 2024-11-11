@@ -13,9 +13,8 @@ class ChromeSpeechService {
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
-   this.wordPositions = [];
-   this.currentWordIndex = 0;
-   this.highlightInterval = null;
+   this.wordTimers = []; // Para limpiar los timers de palabras
+   this.lastWordIndex = 0;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -32,17 +31,68 @@ class ChromeSpeechService {
        pitch: 1,
        splitSentences: false,
        listeners: {
-         onvoiceschanged: voices => {
-           console.log("Voces disponibles:", voices);
+         onboundary: this.handleWordBoundary.bind(this),
+         onend: () => {
+           this.clearWordTimers();
+           if (this.onEndCallback && !this.isPaused) {
+             this.onWordCallback(null);
+             this.onEndCallback();
+           }
          }
        }
      });
 
      if (speechStatus) {
-       console.log("Speech está listo!");
+       console.log("Speech está listo");
      }
    } catch (error) {
      console.error("Error inicializando speech:", error);
+   }
+ }
+
+ clearWordTimers() {
+   this.wordTimers.forEach(timer => clearTimeout(timer));
+   this.wordTimers = [];
+ }
+
+ // Función para calcular la duración estimada de una palabra
+ calculateWordDuration(word, rate) {
+   const baseTime = 200; // Tiempo base en milisegundos
+   const lengthFactor = word.length * 50; // 50ms por carácter
+   return (baseTime + lengthFactor) / rate;
+ }
+
+ handleWordBoundary(event) {
+   if (this.isPaused) return;
+
+   const { charIndex, charLength } = event;
+   if (charIndex !== undefined && charLength !== undefined) {
+     const wordInfo = this.getCurrentWord(this.text, this.currentPosition + charIndex);
+     
+     if (wordInfo) {
+       // Resaltar la palabra actual
+       if (this.onWordCallback) {
+         this.onWordCallback(wordInfo);
+       }
+
+       // Calcular duración de la palabra
+       const duration = this.calculateWordDuration(wordInfo.word, this.mobileSpeech.rate || 1);
+
+       // Programar el fin del resaltado
+       const timer = setTimeout(() => {
+         if (!this.isPaused && this.onWordCallback) {
+           this.onWordCallback(null);
+         }
+       }, duration);
+
+       this.wordTimers.push(timer);
+
+       // Actualizar progreso
+       if (this.onProgressCallback) {
+         const progress = ((this.currentPosition + charIndex) / this.text.length) * 100;
+         this.onProgressCallback(Math.min(progress, 100));
+       }
+     }
    }
  }
 
@@ -51,103 +101,40 @@ class ChromeSpeechService {
      this.text = text;
      this.currentPosition = startPosition;
      this.isPaused = false;
+     this.clearWordTimers();
 
      if (this.isMobile && this.mobileSpeech) {
-       // Detener cualquier reproducción anterior
-       this.mobileSpeech.cancel();
-       if (this.highlightInterval) {
-         clearInterval(this.highlightInterval);
-       }
-
-       // Preparar el mapeo de palabras
-       this.wordPositions = [];
-       let currentPos = startPosition;
-       const textToProcess = text.slice(startPosition);
-       
-       // Mejorado el algoritmo de separación de palabras
-       const words = textToProcess.match(/\S+/g) || [];
-       
-       words.forEach(word => {
-         const start = text.indexOf(word, currentPos);
-         const end = start + word.length;
-         this.wordPositions.push({ word, start, end });
-         currentPos = end + 1;
-       });
-
-       this.currentWordIndex = 0;
-       const startingWordIndex = this.wordPositions.findIndex(wp => wp.start >= startPosition);
-       if (startingWordIndex !== -1) {
-         this.currentWordIndex = startingWordIndex;
-       }
-
-       // Configurar la velocidad
+       // Lógica móvil
+       const textToSpeak = text.slice(startPosition);
        this.mobileSpeech.setRate(rate);
-
-       // Función para resaltar palabras
-       const highlightWords = () => {
-         if (this.currentWordIndex < this.wordPositions.length && !this.isPaused) {
-           const currentWord = this.wordPositions[this.currentWordIndex];
-           if (this.onWordCallback) {
-             this.onWordCallback({
-               word: currentWord.word,
-               start: currentWord.start,
-               end: currentWord.end
-             });
-           }
-
-           if (this.onProgressCallback) {
-             const progress = (currentWord.end / text.length) * 100;
-             this.onProgressCallback(Math.min(progress, 100));
-           }
-         }
-       };
-
-       // Iniciar la reproducción
+       
        await this.mobileSpeech.speak({
-         text: textToProcess,
+         text: textToSpeak,
          queue: false,
          listeners: {
            onstart: () => {
-             // Iniciar el resaltado de palabras
-             this.highlightInterval = setInterval(() => {
-               if (!this.isPaused) {
-                 highlightWords();
-                 this.currentWordIndex++;
-               }
-             }, rate === 1 ? 300 : 450); // Ajustar intervalo según la velocidad
+             console.log("Iniciando lectura móvil");
            },
            onend: () => {
              if (!this.isPaused) {
-               if (this.highlightInterval) {
-                 clearInterval(this.highlightInterval);
-               }
+               this.clearWordTimers();
                if (this.onWordCallback) {
                  this.onWordCallback(null);
                }
                if (this.onEndCallback) {
                  this.onEndCallback();
                }
-               this.currentWordIndex = 0;
              }
            },
            onpause: () => {
-             if (this.highlightInterval) {
-               clearInterval(this.highlightInterval);
-             }
+             this.clearWordTimers();
            },
            onresume: () => {
-             this.highlightInterval = setInterval(() => {
-               if (!this.isPaused) {
-                 highlightWords();
-                 this.currentWordIndex++;
-               }
-             }, rate === 1 ? 300 : 450);
+             // La lectura continuará desde la última palabra
            },
            onerror: (error) => {
-             console.error("Error en speech:", error);
-             if (this.highlightInterval) {
-               clearInterval(this.highlightInterval);
-             }
+             console.error("Error en speech móvil:", error);
+             this.clearWordTimers();
            }
          }
        });
@@ -253,9 +240,7 @@ class ChromeSpeechService {
      this.isPaused = true;
      if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.pause();
-       if (this.highlightInterval) {
-         clearInterval(this.highlightInterval);
-       }
+       this.clearWordTimers();
      } else {
        window.speechSynthesis.pause();
        if (this.onWordCallback) {
@@ -296,16 +281,13 @@ class ChromeSpeechService {
  stop() {
    try {
      this.isPaused = false;
+     this.clearWordTimers();
      if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.cancel();
-       if (this.highlightInterval) {
-         clearInterval(this.highlightInterval);
-       }
      } else {
        window.speechSynthesis.cancel();
      }
      this.currentPosition = 0;
-     this.currentWordIndex = 0;
      this.utterance = null;
      if (this.onWordCallback) {
        this.onWordCallback(null);
