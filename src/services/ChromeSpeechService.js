@@ -48,14 +48,14 @@ class ChromeSpeechService {
         }
  
         let currentWordIndex = this.lastWordIndex;
-        const baseDelay = 400 / rate;
+        const baseDelay = 600 / rate;
  
         const startHighlighting = () => {
           this.mobileHighlightInterval = setInterval(() => {
             if (!this.isPaused && currentWordIndex < wordData.length) {
               const currentWord = wordData[currentWordIndex];
               const wordLength = currentWord.word.length;
-              const wordDelay = baseDelay * (wordLength / 4);
+              const wordDelay = baseDelay * (wordLength / 2)+ 100;
  
               if (this.onWordCallback) {
                 this.onWordCallback({
