@@ -10,45 +10,7 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
-  }
-
-  handleWordBoundary(text, startPosition, event, skipMobileCheck = false) {
-    if (!skipMobileCheck && !this.isMobile) return;
-    
-    try {
-      if (event.name === 'word') {
-        const charIndex = startPosition + (event.charIndex || 0);
-        const textUpToIndex = text.slice(0, charIndex);
-        const textAfterIndex = text.slice(charIndex);
-        
-        // Encontrar el inicio de la palabra actual
-        const beforeWords = textUpToIndex.split(/\s+/);
-        const wordStart = textUpToIndex.length - (beforeWords[beforeWords.length - 1] || '').length;
-        
-        // Encontrar el final de la palabra actual
-        const afterWords = textAfterIndex.split(/\s+/);
-        const wordEnd = charIndex + (afterWords[0] || '').length;
-        
-        // Obtener la palabra actual
-        const word = text.slice(wordStart, wordEnd).trim();
-        
-        if (word && this.onWordCallback) {
-          const wordInfo = {
-            word: word,
-            start: wordStart,
-            end: wordEnd
-          };
-          this.onWordCallback(wordInfo);
-        }
-
-        if (this.onProgressCallback) {
-          const progress = (charIndex / text.length) * 100;
-          this.onProgressCallback(Math.min(progress, 100));
-        }
-      }
-    } catch (error) {
-      console.error('Error en handleWordBoundary:', error);
-    }
+    this.mobileHighlightInterval = null;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -61,20 +23,60 @@ class ChromeSpeechService {
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
       }
+      if (this.mobileHighlightInterval) {
+        clearInterval(this.mobileHighlightInterval);
+      }
 
       if (this.isMobile) {
-        // Configuración específica para móviles
+        // Nueva implementación para móviles
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
 
-        this.utterance.onboundary = (event) => {
-          if (!this.isPaused) {
-            this.handleWordBoundary(text, startPosition, event, true);
+        // Pre-procesar palabras
+        const words = text.slice(startPosition).split(/\s+/);
+        const wordData = [];
+        let pos = startPosition;
+
+        for (let word of words) {
+          if (word) {
+            const start = text.indexOf(word, pos);
+            const end = start + word.length;
+            wordData.push({ word, start, end });
+            pos = end;
           }
+        }
+
+        let currentWordIndex = 0;
+        const baseDelay = 250 / rate; // Ajusta este valor según necesites
+
+        this.utterance.onstart = () => {
+          this.mobileHighlightInterval = setInterval(() => {
+            if (!this.isPaused && currentWordIndex < wordData.length) {
+              const currentWord = wordData[currentWordIndex];
+              
+              if (this.onWordCallback) {
+                this.onWordCallback({
+                  word: currentWord.word,
+                  start: currentWord.start,
+                  end: currentWord.end
+                });
+              }
+
+              if (this.onProgressCallback) {
+                const progress = (currentWord.end / text.length) * 100;
+                this.onProgressCallback(Math.min(progress, 100));
+              }
+
+              currentWordIndex++;
+            }
+          }, baseDelay);
         };
 
         this.utterance.onend = () => {
+          if (this.mobileHighlightInterval) {
+            clearInterval(this.mobileHighlightInterval);
+          }
           if (!this.isPaused) {
             if (this.onWordCallback) {
               this.onWordCallback(null);
@@ -85,19 +87,41 @@ class ChromeSpeechService {
           }
         };
 
-        // Keep-alive específico para móviles
-        if (this.isMobile && this.isChrome) {
-          this.keepAliveInterval = setInterval(() => {
-            if (window.speechSynthesis.speaking && !this.isPaused) {
-              window.speechSynthesis.pause();
-              setTimeout(() => {
-                window.speechSynthesis.resume();
-              }, 50);
-            }
-          }, 5000);
-        }
+        this.utterance.onpause = () => {
+          if (this.mobileHighlightInterval) {
+            clearInterval(this.mobileHighlightInterval);
+          }
+        };
+
+        this.utterance.onresume = () => {
+          // El resaltado se reanudará en la siguiente palabra
+          if (!this.isPaused) {
+            const baseDelay = 250 / rate;
+            this.mobileHighlightInterval = setInterval(() => {
+              if (!this.isPaused && currentWordIndex < wordData.length) {
+                const currentWord = wordData[currentWordIndex];
+                
+                if (this.onWordCallback) {
+                  this.onWordCallback({
+                    word: currentWord.word,
+                    start: currentWord.start,
+                    end: currentWord.end
+                  });
+                }
+
+                if (this.onProgressCallback) {
+                  const progress = (currentWord.end / text.length) * 100;
+                  this.onProgressCallback(Math.min(progress, 100));
+                }
+
+                currentWordIndex++;
+              }
+            }, baseDelay);
+          }
+        };
 
         window.speechSynthesis.speak(this.utterance);
+
       } else {
         // Mantener el comportamiento original para desktop que funciona perfectamente
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
@@ -199,6 +223,9 @@ class ChromeSpeechService {
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
       }
+      if (this.mobileHighlightInterval) {
+        clearInterval(this.mobileHighlightInterval);
+      }
     } catch (error) {
       console.error('Error en pause:', error);
     }
@@ -236,6 +263,9 @@ class ChromeSpeechService {
       }
       if (this.keepAliveInterval) {
         clearInterval(this.keepAliveInterval);
+      }
+      if (this.mobileHighlightInterval) {
+        clearInterval(this.mobileHighlightInterval);
       }
     } catch (error) {
       console.error('Error en stop:', error);
