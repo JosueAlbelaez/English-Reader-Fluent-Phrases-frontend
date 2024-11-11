@@ -10,6 +10,7 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
+    this.lastWordIndex = 0;
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -23,43 +24,74 @@ class ChromeSpeechService {
         clearInterval(this.keepAliveInterval);
       }
 
-      // Configuración común para ambos casos
-      this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
-      this.utterance.lang = 'en-US';
-      this.utterance.rate = rate;
-
       if (this.isMobile) {
-        // En móviles, usamos eventos más granulares
+        const words = text.slice(startPosition).split(/\s+/);
+        let currentText = text.slice(startPosition);
+        
+        this.utterance = new SpeechSynthesisUtterance(currentText);
+        this.utterance.lang = 'en-US';
+        this.utterance.rate = rate;
+        
+        let lastProcessedIndex = -1;
+
         this.utterance.onboundary = (event) => {
-          try {
-            if (event.name === 'word' && !this.isPaused) {
-              const charIndex = (event.charIndex || 0);
-              const wordStart = text.lastIndexOf(' ', charIndex) + 1;
-              const wordEnd = text.indexOf(' ', charIndex);
-              const word = text.slice(
-                wordStart,
-                wordEnd > -1 ? wordEnd : text.length
-              );
+          if (this.isPaused) return;
+          
+          if (event.name === 'word') {
+            const charIndex = event.charIndex || 0;
+            const currentTextUpToChar = currentText.slice(0, charIndex);
+            const wordCount = currentTextUpToChar.trim().split(/\s+/).length;
 
-              if (this.onWordCallback) {
-                this.onWordCallback({
-                  word: word.trim(),
-                  start: wordStart,
-                  end: wordEnd > -1 ? wordEnd : text.length
-                });
-              }
+            // Solo procesar si es una nueva palabra
+            if (wordCount > 0 && wordCount !== lastProcessedIndex) {
+              lastProcessedIndex = wordCount;
+              const textUntilChar = text.slice(startPosition, startPosition + charIndex);
+              const wordsUntilChar = textUntilChar.trim().split(/\s+/);
+              const currentWord = wordsUntilChar[wordsUntilChar.length - 1];
 
-              if (this.onProgressCallback) {
-                const progress = (charIndex / text.length) * 100;
-                this.onProgressCallback(Math.min(progress, 100));
+              if (currentWord) {
+                const start = text.indexOf(currentWord, startPosition);
+                const end = start + currentWord.length;
+
+                // Actualizar la posición actual para el manejo de pausa/resumen
+                this.currentPosition = start;
+
+                if (this.onWordCallback) {
+                  this.onWordCallback({
+                    word: currentWord,
+                    start: start,
+                    end: end
+                  });
+                }
+
+                if (this.onProgressCallback) {
+                  const progress = (charIndex / currentText.length) * 100;
+                  this.onProgressCallback(Math.min(progress, 100));
+                }
               }
             }
-          } catch (error) {
-            console.error('Error en mobile onboundary:', error);
           }
         };
+
+        this.utterance.onend = () => {
+          if (!this.isPaused) {
+            if (this.onWordCallback) {
+              this.onWordCallback(null);
+            }
+            if (this.onEndCallback) {
+              this.onEndCallback();
+            }
+          }
+        };
+
+        window.speechSynthesis.speak(this.utterance);
+
       } else {
-        // Mantener el comportamiento original para desktop
+        // Mantener el comportamiento original para desktop que funciona perfectamente
+        this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
+        this.utterance.lang = 'en-US';
+        this.utterance.rate = rate;
+
         this.utterance.onboundary = (event) => {
           try {
             if (event.name === 'word') {
@@ -79,38 +111,36 @@ class ChromeSpeechService {
             console.error('Error en onboundary:', error);
           }
         };
-      }
 
-      // Configuración común del evento onend
-      this.utterance.onend = () => {
-        try {
-          if (!this.isPaused) {
-            if (this.onWordCallback) {
-              this.onWordCallback(null);
+        this.utterance.onend = () => {
+          try {
+            if (!this.isPaused) {
+              if (this.onWordCallback) {
+                this.onWordCallback(null);
+              }
+              if (this.onEndCallback) {
+                this.onEndCallback();
+              }
+              if (this.keepAliveInterval) {
+                clearInterval(this.keepAliveInterval);
+              }
             }
-            if (this.onEndCallback) {
-              this.onEndCallback();
-            }
-            if (this.keepAliveInterval) {
-              clearInterval(this.keepAliveInterval);
-            }
+          } catch (error) {
+            console.error('Error en onend:', error);
           }
-        } catch (error) {
-          console.error('Error en onend:', error);
+        };
+
+        if (this.isChrome) {
+          this.keepAliveInterval = setInterval(() => {
+            if (window.speechSynthesis.speaking && !this.isPaused) {
+              window.speechSynthesis.pause();
+              window.speechSynthesis.resume();
+            }
+          }, 14000);
         }
-      };
 
-      // Keep alive para Chrome
-      if (this.isChrome) {
-        this.keepAliveInterval = setInterval(() => {
-          if (window.speechSynthesis.speaking && !this.isPaused) {
-            window.speechSynthesis.pause();
-            window.speechSynthesis.resume();
-          }
-        }, 14000);
+        window.speechSynthesis.speak(this.utterance);
       }
-
-      window.speechSynthesis.speak(this.utterance);
       return this.utterance;
     } catch (error) {
       console.error('Error en speak:', error);
