@@ -10,7 +10,7 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
-    this.lastWordIndex = 0;
+    this.wordPositions = [];
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -25,49 +25,44 @@ class ChromeSpeechService {
       }
 
       if (this.isMobile) {
-        const words = text.slice(startPosition).split(/\s+/);
-        let currentText = text.slice(startPosition);
-        
-        this.utterance = new SpeechSynthesisUtterance(currentText);
+        // Preparar el mapeo de palabras para dispositivos móviles
+        this.wordPositions = [];
+        let textToAnalyze = text.slice(startPosition);
+        let currentPosition = startPosition;
+        let words = textToAnalyze.split(/\b/);
+
+        words.forEach(word => {
+          if (word.trim()) {
+            const start = text.indexOf(word, currentPosition);
+            const end = start + word.length;
+            this.wordPositions.push({ word, start, end });
+            currentPosition = end;
+          }
+        });
+
+        this.utterance = new SpeechSynthesisUtterance(textToAnalyze);
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
-        
-        let lastProcessedIndex = -1;
 
         this.utterance.onboundary = (event) => {
-          if (this.isPaused) return;
-          
-          if (event.name === 'word') {
-            const charIndex = event.charIndex || 0;
-            const currentTextUpToChar = currentText.slice(0, charIndex);
-            const wordCount = currentTextUpToChar.trim().split(/\s+/).length;
+          if (event.name === 'word' && !this.isPaused) {
+            const charIndex = startPosition + (event.charIndex || 0);
+            
+            // Encontrar la palabra actual basada en el índice de caracteres
+            const currentWordInfo = this.wordPositions.find(wp => 
+              charIndex >= wp.start && charIndex <= wp.end
+            );
 
-            // Solo procesar si es una nueva palabra
-            if (wordCount > 0 && wordCount !== lastProcessedIndex) {
-              lastProcessedIndex = wordCount;
-              const textUntilChar = text.slice(startPosition, startPosition + charIndex);
-              const wordsUntilChar = textUntilChar.trim().split(/\s+/);
-              const currentWord = wordsUntilChar[wordsUntilChar.length - 1];
+            if (currentWordInfo && this.onWordCallback) {
+              this.onWordCallback({
+                word: currentWordInfo.word,
+                start: currentWordInfo.start,
+                end: currentWordInfo.end
+              });
 
-              if (currentWord) {
-                const start = text.indexOf(currentWord, startPosition);
-                const end = start + currentWord.length;
-
-                // Actualizar la posición actual para el manejo de pausa/resumen
-                this.currentPosition = start;
-
-                if (this.onWordCallback) {
-                  this.onWordCallback({
-                    word: currentWord,
-                    start: start,
-                    end: end
-                  });
-                }
-
-                if (this.onProgressCallback) {
-                  const progress = (charIndex / currentText.length) * 100;
-                  this.onProgressCallback(Math.min(progress, 100));
-                }
+              if (this.onProgressCallback) {
+                const progress = (charIndex / text.length) * 100;
+                this.onProgressCallback(Math.min(progress, 100));
               }
             }
           }
