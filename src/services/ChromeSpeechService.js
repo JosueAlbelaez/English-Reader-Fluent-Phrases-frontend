@@ -10,7 +10,45 @@ class ChromeSpeechService {
     this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     this.keepAliveInterval = null;
-    this.wordPositions = [];
+  }
+
+  handleWordBoundary(text, startPosition, event, skipMobileCheck = false) {
+    if (!skipMobileCheck && !this.isMobile) return;
+    
+    try {
+      if (event.name === 'word') {
+        const charIndex = startPosition + (event.charIndex || 0);
+        const textUpToIndex = text.slice(0, charIndex);
+        const textAfterIndex = text.slice(charIndex);
+        
+        // Encontrar el inicio de la palabra actual
+        const beforeWords = textUpToIndex.split(/\s+/);
+        const wordStart = textUpToIndex.length - (beforeWords[beforeWords.length - 1] || '').length;
+        
+        // Encontrar el final de la palabra actual
+        const afterWords = textAfterIndex.split(/\s+/);
+        const wordEnd = charIndex + (afterWords[0] || '').length;
+        
+        // Obtener la palabra actual
+        const word = text.slice(wordStart, wordEnd).trim();
+        
+        if (word && this.onWordCallback) {
+          const wordInfo = {
+            word: word,
+            start: wordStart,
+            end: wordEnd
+          };
+          this.onWordCallback(wordInfo);
+        }
+
+        if (this.onProgressCallback) {
+          const progress = (charIndex / text.length) * 100;
+          this.onProgressCallback(Math.min(progress, 100));
+        }
+      }
+    } catch (error) {
+      console.error('Error en handleWordBoundary:', error);
+    }
   }
 
   speak(text, startPosition = 0, rate = 1.0) {
@@ -25,46 +63,14 @@ class ChromeSpeechService {
       }
 
       if (this.isMobile) {
-        // Preparar el mapeo de palabras para dispositivos móviles
-        this.wordPositions = [];
-        let textToAnalyze = text.slice(startPosition);
-        let currentPosition = startPosition;
-        let words = textToAnalyze.split(/\b/);
-
-        words.forEach(word => {
-          if (word.trim()) {
-            const start = text.indexOf(word, currentPosition);
-            const end = start + word.length;
-            this.wordPositions.push({ word, start, end });
-            currentPosition = end;
-          }
-        });
-
-        this.utterance = new SpeechSynthesisUtterance(textToAnalyze);
+        // Configuración específica para móviles
+        this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
         this.utterance.lang = 'en-US';
         this.utterance.rate = rate;
 
         this.utterance.onboundary = (event) => {
-          if (event.name === 'word' && !this.isPaused) {
-            const charIndex = startPosition + (event.charIndex || 0);
-            
-            // Encontrar la palabra actual basada en el índice de caracteres
-            const currentWordInfo = this.wordPositions.find(wp => 
-              charIndex >= wp.start && charIndex <= wp.end
-            );
-
-            if (currentWordInfo && this.onWordCallback) {
-              this.onWordCallback({
-                word: currentWordInfo.word,
-                start: currentWordInfo.start,
-                end: currentWordInfo.end
-              });
-
-              if (this.onProgressCallback) {
-                const progress = (charIndex / text.length) * 100;
-                this.onProgressCallback(Math.min(progress, 100));
-              }
-            }
+          if (!this.isPaused) {
+            this.handleWordBoundary(text, startPosition, event, true);
           }
         };
 
@@ -79,8 +85,19 @@ class ChromeSpeechService {
           }
         };
 
-        window.speechSynthesis.speak(this.utterance);
+        // Keep-alive específico para móviles
+        if (this.isMobile && this.isChrome) {
+          this.keepAliveInterval = setInterval(() => {
+            if (window.speechSynthesis.speaking && !this.isPaused) {
+              window.speechSynthesis.pause();
+              setTimeout(() => {
+                window.speechSynthesis.resume();
+              }, 50);
+            }
+          }, 5000);
+        }
 
+        window.speechSynthesis.speak(this.utterance);
       } else {
         // Mantener el comportamiento original para desktop que funciona perfectamente
         this.utterance = new SpeechSynthesisUtterance(text.slice(startPosition));
