@@ -13,9 +13,7 @@ class ChromeSpeechService {
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
-   this.currentText = '';
    this.currentRate = 1.0;
-   this.pausedPosition = 0;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -30,8 +28,7 @@ class ChromeSpeechService {
        lang: 'en-US',
        rate: 1,
        pitch: 1,
-       splitSentences: false,
-       preservesPitch: true
+       splitSentences: false
      });
      console.log("Speech está listo");
    } catch (error) {
@@ -45,18 +42,18 @@ class ChromeSpeechService {
      this.currentPosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
-     this.currentText = text.slice(startPosition);
-     this.pausedPosition = startPosition;
 
      if (this.isMobile && this.mobileSpeech) {
-       // Aseguramos que cualquier instancia previa se detenga
-       this.mobileSpeech.cancel();
-       
-       // Configuramos la velocidad antes de hablar
+       // Asegurarse de que no haya una instancia previa hablando
+       if (this.mobileSpeech.speaking) {
+         await this.mobileSpeech.cancel();
+       }
+
+       // Establecer la velocidad
        await this.mobileSpeech.setRate(rate);
-       
-       await this.mobileSpeech.speak({
-         text: this.currentText,
+
+       return this.mobileSpeech.speak({
+         text: text.slice(startPosition),
          queue: false,
          listeners: {
            onend: () => {
@@ -126,7 +123,6 @@ class ChromeSpeechService {
 
        window.speechSynthesis.speak(this.utterance);
      }
-     return this.utterance;
    } catch (error) {
      console.error('Error en speak:', error);
      throw error;
@@ -134,95 +130,76 @@ class ChromeSpeechService {
  }
 
  pause() {
-   try {
-     if (this.isMobile && this.mobileSpeech) {
-       // Guardamos la posición actual aproximada basada en el tiempo transcurrido
-       const elapsedTime = this.mobileSpeech.speaking ? this.mobileSpeech.elapsed() : 0;
-       const wordsPerMinute = 150 * this.currentRate; // Estimación de palabras por minuto
-       const wordsSpoken = (wordsPerMinute / 60) * (elapsedTime / 1000);
-       const averageWordLength = 5; // Longitud promedio de palabra en caracteres
-       this.pausedPosition = Math.floor(wordsSpoken * averageWordLength);
-       
-       this.mobileSpeech.pause();
-       this.isPaused = true;
-     } else {
-       window.speechSynthesis.pause();
-       if (this.onWordCallback) {
-         this.onWordCallback(null);
+   if (this.isMobile && this.mobileSpeech) {
+     try {
+       // Verificar si realmente está hablando antes de intentar pausar
+       if (this.mobileSpeech.speaking) {
+         this.mobileSpeech.pause();
+         this.isPaused = true;
+         console.log('Audio pausado en móvil');
        }
-       if (this.keepAliveInterval) {
-         clearInterval(this.keepAliveInterval);
-       }
-       this.isPaused = true;
+     } catch (error) {
+       console.error('Error al pausar en móvil:', error);
      }
-   } catch (error) {
-     console.error('Error en pause:', error);
+   } else {
+     window.speechSynthesis.pause();
+     if (this.onWordCallback) {
+       this.onWordCallback(null);
+     }
+     if (this.keepAliveInterval) {
+       clearInterval(this.keepAliveInterval);
+     }
+     this.isPaused = true;
    }
  }
 
  resume() {
-   try {
-     if (this.isPaused) {
-       if (this.isMobile && this.mobileSpeech) {
-         const remainingText = this.currentText.slice(this.pausedPosition);
-         this.mobileSpeech.cancel(); // Cancelamos la instancia anterior
-         
-         // Configuramos la velocidad nuevamente antes de reanudar
-         this.mobileSpeech.setRate(this.currentRate);
-         
-         this.mobileSpeech.speak({
-           text: remainingText,
-           queue: false,
-           listeners: {
-             onend: () => {
-               if (!this.isPaused && this.onEndCallback) {
-                 this.onEndCallback();
-               }
-             }
-           }
-         });
-         
+   if (this.isMobile && this.mobileSpeech) {
+     try {
+       // Verificar si está pausado antes de intentar reanudar
+       if (this.isPaused) {
+         this.mobileSpeech.resume();
          this.isPaused = false;
-       } else {
-         window.speechSynthesis.resume();
-         if (this.isChrome) {
-           this.keepAliveInterval = setInterval(() => {
-             if (window.speechSynthesis.speaking && !this.isPaused) {
-               window.speechSynthesis.pause();
-               window.speechSynthesis.resume();
-             }
-           }, 14000);
-         }
-         this.isPaused = false;
+         console.log('Audio reanudado en móvil');
        }
+     } catch (error) {
+       console.error('Error al reanudar en móvil:', error);
      }
-   } catch (error) {
-     console.error('Error en resume:', error);
+   } else {
+     window.speechSynthesis.resume();
+     if (this.isChrome) {
+       this.keepAliveInterval = setInterval(() => {
+         if (window.speechSynthesis.speaking && !this.isPaused) {
+           window.speechSynthesis.pause();
+           window.speechSynthesis.resume();
+         }
+       }, 14000);
+     }
+     this.isPaused = false;
    }
  }
 
  stop() {
-   try {
-     if (this.isMobile && this.mobileSpeech) {
+   if (this.isMobile && this.mobileSpeech) {
+     try {
        this.mobileSpeech.cancel();
        this.isPaused = false;
-       this.pausedPosition = 0;
-       this.currentText = '';
-     } else {
-       window.speechSynthesis.cancel();
-       if (this.onWordCallback) {
-         this.onWordCallback(null);
-       }
-       if (this.keepAliveInterval) {
-         clearInterval(this.keepAliveInterval);
-       }
+       console.log('Audio detenido en móvil');
+     } catch (error) {
+       console.error('Error al detener en móvil:', error);
      }
-     this.currentPosition = 0;
-     this.utterance = null;
-     this.isPaused = false;
-   } catch (error) {
-     console.error('Error en stop:', error);
+   } else {
+     window.speechSynthesis.cancel();
+     if (this.onWordCallback) {
+       this.onWordCallback(null);
+     }
+     if (this.keepAliveInterval) {
+       clearInterval(this.keepAliveInterval);
+     }
    }
+   this.currentPosition = 0;
+   this.utterance = null;
+   this.isPaused = false;
  }
 
  getCurrentWord(text, charIndex) {
