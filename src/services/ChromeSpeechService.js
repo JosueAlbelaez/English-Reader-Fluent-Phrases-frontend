@@ -13,7 +13,9 @@ class ChromeSpeechService {
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
+   this.currentText = '';
    this.currentRate = 1.0;
+   this.pausedPosition = 0;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -28,7 +30,8 @@ class ChromeSpeechService {
        lang: 'en-US',
        rate: 1,
        pitch: 1,
-       splitSentences: false
+       splitSentences: false,
+       preservesPitch: true
      });
      console.log("Speech está listo");
    } catch (error) {
@@ -42,12 +45,19 @@ class ChromeSpeechService {
      this.currentPosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
+     this.currentText = text.slice(startPosition);
+     this.pausedPosition = startPosition;
 
      if (this.isMobile && this.mobileSpeech) {
+       // Aseguramos que cualquier instancia previa se detenga
+       this.mobileSpeech.cancel();
+       
+       // Configuramos la velocidad antes de hablar
+       await this.mobileSpeech.setRate(rate);
+       
        await this.mobileSpeech.speak({
-         text: text.slice(startPosition),
+         text: this.currentText,
          queue: false,
-         rate: rate,
          listeners: {
            onend: () => {
              if (!this.isPaused && this.onEndCallback) {
@@ -126,6 +136,13 @@ class ChromeSpeechService {
  pause() {
    try {
      if (this.isMobile && this.mobileSpeech) {
+       // Guardamos la posición actual aproximada basada en el tiempo transcurrido
+       const elapsedTime = this.mobileSpeech.speaking ? this.mobileSpeech.elapsed() : 0;
+       const wordsPerMinute = 150 * this.currentRate; // Estimación de palabras por minuto
+       const wordsSpoken = (wordsPerMinute / 60) * (elapsedTime / 1000);
+       const averageWordLength = 5; // Longitud promedio de palabra en caracteres
+       this.pausedPosition = Math.floor(wordsSpoken * averageWordLength);
+       
        this.mobileSpeech.pause();
        this.isPaused = true;
      } else {
@@ -147,7 +164,24 @@ class ChromeSpeechService {
    try {
      if (this.isPaused) {
        if (this.isMobile && this.mobileSpeech) {
-         this.mobileSpeech.resume();
+         const remainingText = this.currentText.slice(this.pausedPosition);
+         this.mobileSpeech.cancel(); // Cancelamos la instancia anterior
+         
+         // Configuramos la velocidad nuevamente antes de reanudar
+         this.mobileSpeech.setRate(this.currentRate);
+         
+         this.mobileSpeech.speak({
+           text: remainingText,
+           queue: false,
+           listeners: {
+             onend: () => {
+               if (!this.isPaused && this.onEndCallback) {
+                 this.onEndCallback();
+               }
+             }
+           }
+         });
+         
          this.isPaused = false;
        } else {
          window.speechSynthesis.resume();
@@ -172,6 +206,8 @@ class ChromeSpeechService {
      if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.cancel();
        this.isPaused = false;
+       this.pausedPosition = 0;
+       this.currentText = '';
      } else {
        window.speechSynthesis.cancel();
        if (this.onWordCallback) {
