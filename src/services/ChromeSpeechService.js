@@ -17,6 +17,7 @@ class ChromeSpeechService {
    this.lastPosition = 0;
    this.currentSegmentIndex = 0;
    this.segments = [];
+   this.pausedSegmentOffset = 0;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -43,7 +44,6 @@ class ChromeSpeechService {
      }
    });
 
-   // Nuevo: Manejar el estado de la app
    window.addEventListener('focus', () => {
      if (this.isMobile && this.mobileSpeech && this.isPaused) {
        this.stop();
@@ -75,9 +75,7 @@ class ChromeSpeechService {
        }
      });
 
-     // Forzar configuración en inglés
      await this.mobileSpeech.setLanguage('en-US');
-     console.log("Speech está listo");
    } catch (error) {
      console.error("Error inicializando speech:", error);
    }
@@ -89,17 +87,30 @@ class ChromeSpeechService {
      this.currentPosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
-     this.lastPosition = startPosition;
 
      if (this.isMobile && this.mobileSpeech) {
        await this.mobileSpeech.cancel();
        await this.mobileSpeech.setLanguage('en-US');
        await this.mobileSpeech.setRate(rate);
 
-       // Mejorado: División de texto en segmentos más grandes
        const textToSpeak = text.slice(startPosition);
        this.segments = this.splitTextIntoSegments(textToSpeak, 500);
-       this.currentSegmentIndex = 0;
+       
+       // Si estamos reanudando, encontramos el segmento correcto
+       if (startPosition > 0) {
+         let accumulatedLength = 0;
+         for (let i = 0; i < this.segments.length; i++) {
+           if (accumulatedLength + this.segments[i].length >= this.pausedSegmentOffset) {
+             this.currentSegmentIndex = i;
+             const remainingOffset = this.pausedSegmentOffset - accumulatedLength;
+             this.segments[i] = this.segments[i].slice(remainingOffset);
+             break;
+           }
+           accumulatedLength += this.segments[i].length;
+         }
+       } else {
+         this.currentSegmentIndex = 0;
+       }
 
        const speakNextSegment = async () => {
          if (this.currentSegmentIndex < this.segments.length && !this.isPaused) {
@@ -226,11 +237,15 @@ class ChromeSpeechService {
      try {
        this.mobileSpeech.pause();
        this.isPaused = true;
-       // Guardar la posición actual
-       this.lastPosition += this.segments
+       
+       // Calcular la posición exacta de pausa
+       const previousSegmentsLength = this.segments
          .slice(0, this.currentSegmentIndex)
          .join('')
          .length;
+         
+       this.pausedSegmentOffset = previousSegmentsLength;
+       this.lastPosition = this.currentPosition + previousSegmentsLength;
      } catch (error) {
        console.error('Error al pausar en móvil:', error);
      }
@@ -250,7 +265,7 @@ class ChromeSpeechService {
    if (this.isMobile && this.mobileSpeech) {
      try {
        if (this.isPaused) {
-         // Reanudar desde la última posición conocida
+         // Usar la posición exacta guardada durante la pausa
          this.speak(this.text, this.lastPosition, this.currentRate);
        }
      } catch (error) {
@@ -278,6 +293,7 @@ class ChromeSpeechService {
        this.lastPosition = 0;
        this.currentSegmentIndex = 0;
        this.segments = [];
+       this.pausedSegmentOffset = 0;
      } catch (error) {
        console.error('Error al detener en móvil:', error);
      }
