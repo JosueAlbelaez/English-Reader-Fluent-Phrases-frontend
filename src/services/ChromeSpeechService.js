@@ -15,6 +15,8 @@ class ChromeSpeechService {
    this.mobileSpeech = null;
    this.currentRate = 1.0;
    this.lastPosition = 0;
+   this.currentSegmentIndex = 0;
+   this.segments = [];
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -23,23 +25,27 @@ class ChromeSpeechService {
  }
 
  setupMobileEventListeners() {
-   // Manejar cuando la página se oculta o cierra
    document.addEventListener('visibilitychange', () => {
      if (document.hidden && this.isMobile && this.mobileSpeech) {
        this.stop();
      }
    });
 
-   // Manejar cuando la app se cierra o recarga
    window.addEventListener('beforeunload', () => {
      if (this.isMobile && this.mobileSpeech) {
        this.stop();
      }
    });
 
-   // Manejar cuando el dispositivo se bloquea (solo para móviles)
    window.addEventListener('pagehide', () => {
      if (this.isMobile && this.mobileSpeech) {
+       this.stop();
+     }
+   });
+
+   // Nuevo: Manejar el estado de la app
+   window.addEventListener('focus', () => {
+     if (this.isMobile && this.mobileSpeech && this.isPaused) {
        this.stop();
      }
    });
@@ -48,19 +54,18 @@ class ChromeSpeechService {
  async initializeMobileSpeech() {
    try {
      this.mobileSpeech = new Speech();
-     const voices = await this.mobileSpeech.init({
+     await this.mobileSpeech.init({
        volume: 1,
        lang: 'en-US',
        rate: 1,
        pitch: 1,
-       splitSentences: true,
+       splitSentences: false,
        listeners: {
          onvoiceschanged: (voices) => {
-           // Intentar establecer una voz en inglés específica
            const englishVoice = voices.find(voice => 
-             voice.lang.includes('en-US') && voice.name.includes('Google')
+             voice.lang === 'en-US' && voice.name.includes('Google US English')
            ) || voices.find(voice => 
-             voice.lang.includes('en-US')
+             voice.lang === 'en-US'
            );
            
            if (englishVoice) {
@@ -70,6 +75,8 @@ class ChromeSpeechService {
        }
      });
 
+     // Forzar configuración en inglés
+     await this.mobileSpeech.setLanguage('en-US');
      console.log("Speech está listo");
    } catch (error) {
      console.error("Error inicializando speech:", error);
@@ -85,37 +92,42 @@ class ChromeSpeechService {
      this.lastPosition = startPosition;
 
      if (this.isMobile && this.mobileSpeech) {
-       // Asegurarse de que no haya una instancia previa hablando
        await this.mobileSpeech.cancel();
-
-       // Forzar configuración de voz en inglés
        await this.mobileSpeech.setLanguage('en-US');
        await this.mobileSpeech.setRate(rate);
 
-       // Dividir el texto en segmentos más pequeños
+       // Mejorado: División de texto en segmentos más grandes
        const textToSpeak = text.slice(startPosition);
-       const segments = this.splitTextIntoSegments(textToSpeak);
+       this.segments = this.splitTextIntoSegments(textToSpeak, 500);
+       this.currentSegmentIndex = 0;
 
-       // Función para hablar segmentos secuencialmente
-       const speakSegments = async (index = 0) => {
-         if (index < segments.length && !this.isPaused) {
-           const segment = segments[index];
+       const speakNextSegment = async () => {
+         if (this.currentSegmentIndex < this.segments.length && !this.isPaused) {
+           const segment = this.segments[this.currentSegmentIndex];
+           
            await this.mobileSpeech.speak({
              text: segment,
              queue: false,
              listeners: {
+               onstart: () => {
+                 this.lastPosition = startPosition + 
+                   this.segments.slice(0, this.currentSegmentIndex).join('').length;
+               },
                onend: () => {
                  if (!this.isPaused) {
-                   // Actualizar la última posición
-                   this.lastPosition = startPosition + 
-                     segments.slice(0, index + 1).join('').length;
-                   
-                   if (index === segments.length - 1) {
-                     // Último segmento
-                     if (this.onEndCallback) this.onEndCallback();
+                   this.currentSegmentIndex++;
+                   if (this.currentSegmentIndex < this.segments.length) {
+                     speakNextSegment();
                    } else {
-                     // Continuar con el siguiente segmento
-                     speakSegments(index + 1);
+                     if (this.onEndCallback) this.onEndCallback();
+                   }
+                 }
+               },
+               onboundary: (event) => {
+                 if (event.name === 'word' && this.onWordCallback) {
+                   const wordInfo = this.getCurrentWord(segment, event.charIndex);
+                   if (wordInfo) {
+                     this.onWordCallback(wordInfo);
                    }
                  }
                }
@@ -124,10 +136,9 @@ class ChromeSpeechService {
          }
        };
 
-       await speakSegments();
-
+       await speakNextSegment();
      } else {
-       // Mantener el comportamiento original para desktop que funciona perfectamente
+       // Código original para desktop sin modificaciones
        window.speechSynthesis.cancel();
        if (this.keepAliveInterval) {
          clearInterval(this.keepAliveInterval);
@@ -192,7 +203,7 @@ class ChromeSpeechService {
    }
  }
 
- splitTextIntoSegments(text, maxLength = 200) {
+ splitTextIntoSegments(text, maxLength = 500) {
    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
    const segments = [];
    let currentSegment = '';
@@ -215,6 +226,11 @@ class ChromeSpeechService {
      try {
        this.mobileSpeech.pause();
        this.isPaused = true;
+       // Guardar la posición actual
+       this.lastPosition += this.segments
+         .slice(0, this.currentSegmentIndex)
+         .join('')
+         .length;
      } catch (error) {
        console.error('Error al pausar en móvil:', error);
      }
@@ -260,6 +276,8 @@ class ChromeSpeechService {
        this.mobileSpeech.cancel();
        this.isPaused = false;
        this.lastPosition = 0;
+       this.currentSegmentIndex = 0;
+       this.segments = [];
      } catch (error) {
        console.error('Error al detener en móvil:', error);
      }
@@ -275,7 +293,7 @@ class ChromeSpeechService {
    this.currentPosition = 0;
    this.utterance = null;
    this.isPaused = false;
-}
+ }
 
  getCurrentWord(text, charIndex) {
    try {
