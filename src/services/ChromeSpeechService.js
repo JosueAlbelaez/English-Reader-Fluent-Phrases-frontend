@@ -14,22 +14,62 @@ class ChromeSpeechService {
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
    this.currentRate = 1.0;
+   this.lastPosition = 0;
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
+     this.setupMobileEventListeners();
    }
+ }
+
+ setupMobileEventListeners() {
+   // Manejar cuando la página se oculta o cierra
+   document.addEventListener('visibilitychange', () => {
+     if (document.hidden && this.isMobile && this.mobileSpeech) {
+       this.stop();
+     }
+   });
+
+   // Manejar cuando la app se cierra o recarga
+   window.addEventListener('beforeunload', () => {
+     if (this.isMobile && this.mobileSpeech) {
+       this.stop();
+     }
+   });
+
+   // Manejar cuando el dispositivo se bloquea (solo para móviles)
+   window.addEventListener('pagehide', () => {
+     if (this.isMobile && this.mobileSpeech) {
+       this.stop();
+     }
+   });
  }
 
  async initializeMobileSpeech() {
    try {
      this.mobileSpeech = new Speech();
-     await this.mobileSpeech.init({
+     const voices = await this.mobileSpeech.init({
        volume: 1,
        lang: 'en-US',
        rate: 1,
        pitch: 1,
-       splitSentences: false
+       splitSentences: true,
+       listeners: {
+         onvoiceschanged: (voices) => {
+           // Intentar establecer una voz en inglés específica
+           const englishVoice = voices.find(voice => 
+             voice.lang.includes('en-US') && voice.name.includes('Google')
+           ) || voices.find(voice => 
+             voice.lang.includes('en-US')
+           );
+           
+           if (englishVoice) {
+             this.mobileSpeech.setVoice(englishVoice.name);
+           }
+         }
+       }
      });
+
      console.log("Speech está listo");
    } catch (error) {
      console.error("Error inicializando speech:", error);
@@ -42,27 +82,50 @@ class ChromeSpeechService {
      this.currentPosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
+     this.lastPosition = startPosition;
 
      if (this.isMobile && this.mobileSpeech) {
        // Asegurarse de que no haya una instancia previa hablando
-       if (this.mobileSpeech.speaking) {
-         await this.mobileSpeech.cancel();
-       }
+       await this.mobileSpeech.cancel();
 
-       // Establecer la velocidad
+       // Forzar configuración de voz en inglés
+       await this.mobileSpeech.setLanguage('en-US');
        await this.mobileSpeech.setRate(rate);
 
-       return this.mobileSpeech.speak({
-         text: text.slice(startPosition),
-         queue: false,
-         listeners: {
-           onend: () => {
-             if (!this.isPaused && this.onEndCallback) {
-               this.onEndCallback();
+       // Dividir el texto en segmentos más pequeños
+       const textToSpeak = text.slice(startPosition);
+       const segments = this.splitTextIntoSegments(textToSpeak);
+
+       // Función para hablar segmentos secuencialmente
+       const speakSegments = async (index = 0) => {
+         if (index < segments.length && !this.isPaused) {
+           const segment = segments[index];
+           await this.mobileSpeech.speak({
+             text: segment,
+             queue: false,
+             listeners: {
+               onend: () => {
+                 if (!this.isPaused) {
+                   // Actualizar la última posición
+                   this.lastPosition = startPosition + 
+                     segments.slice(0, index + 1).join('').length;
+                   
+                   if (index === segments.length - 1) {
+                     // Último segmento
+                     if (this.onEndCallback) this.onEndCallback();
+                   } else {
+                     // Continuar con el siguiente segmento
+                     speakSegments(index + 1);
+                   }
+                 }
+               }
              }
-           }
+           });
          }
-       });
+       };
+
+       await speakSegments();
+
      } else {
        // Mantener el comportamiento original para desktop que funciona perfectamente
        window.speechSynthesis.cancel();
@@ -129,15 +192,29 @@ class ChromeSpeechService {
    }
  }
 
+ splitTextIntoSegments(text, maxLength = 200) {
+   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+   const segments = [];
+   let currentSegment = '';
+
+   for (const sentence of sentences) {
+     if (currentSegment.length + sentence.length <= maxLength) {
+       currentSegment += sentence;
+     } else {
+       if (currentSegment) segments.push(currentSegment.trim());
+       currentSegment = sentence;
+     }
+   }
+
+   if (currentSegment) segments.push(currentSegment.trim());
+   return segments;
+ }
+
  pause() {
    if (this.isMobile && this.mobileSpeech) {
      try {
-       // Verificar si realmente está hablando antes de intentar pausar
-       if (this.mobileSpeech.speaking) {
-         this.mobileSpeech.pause();
-         this.isPaused = true;
-         console.log('Audio pausado en móvil');
-       }
+       this.mobileSpeech.pause();
+       this.isPaused = true;
      } catch (error) {
        console.error('Error al pausar en móvil:', error);
      }
@@ -156,11 +233,9 @@ class ChromeSpeechService {
  resume() {
    if (this.isMobile && this.mobileSpeech) {
      try {
-       // Verificar si está pausado antes de intentar reanudar
        if (this.isPaused) {
-         this.mobileSpeech.resume();
-         this.isPaused = false;
-         console.log('Audio reanudado en móvil');
+         // Reanudar desde la última posición conocida
+         this.speak(this.text, this.lastPosition, this.currentRate);
        }
      } catch (error) {
        console.error('Error al reanudar en móvil:', error);
@@ -184,7 +259,7 @@ class ChromeSpeechService {
      try {
        this.mobileSpeech.cancel();
        this.isPaused = false;
-       console.log('Audio detenido en móvil');
+       this.lastPosition = 0;
      } catch (error) {
        console.error('Error al detener en móvil:', error);
      }
@@ -200,7 +275,7 @@ class ChromeSpeechService {
    this.currentPosition = 0;
    this.utterance = null;
    this.isPaused = false;
- }
+}
 
  getCurrentWord(text, charIndex) {
    try {
