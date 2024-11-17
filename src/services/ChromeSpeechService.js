@@ -14,8 +14,12 @@ class ChromeSpeechService {
    this.keepAliveInterval = null;
    this.mobileSpeech = null;
    this.currentRate = 1.0;
-   this.resumePosition = 0;
-   this.speaking = false;
+   this.androidSpeech = null;
+   this.currentText = '';
+   this.pausedTime = 0;
+   this.startTime = 0;
+   this.pausedPosition = 0;
+   this.isAndroidChrome = this.isMobile && this.isChrome && /Android/.test(navigator.userAgent);
 
    if (this.isMobile) {
      this.initializeMobileSpeech();
@@ -24,14 +28,19 @@ class ChromeSpeechService {
 
  async initializeMobileSpeech() {
    try {
-     this.mobileSpeech = new Speech();
-     await this.mobileSpeech.init({
-       volume: 1,
-       lang: 'en-US',
-       rate: 1,
-       pitch: 1,
-       splitSentences: false
-     });
+     // Para Android Chrome, usamos directamente speechSynthesis
+     if (this.isAndroidChrome) {
+       this.androidSpeech = window.speechSynthesis;
+     } else {
+       this.mobileSpeech = new Speech();
+       await this.mobileSpeech.init({
+         volume: 1,
+         lang: 'en-US',
+         rate: 1,
+         pitch: 1,
+         splitSentences: false
+       });
+     }
      console.log("Speech está listo");
    } catch (error) {
      console.error("Error inicializando speech:", error);
@@ -42,43 +51,42 @@ class ChromeSpeechService {
    try {
      this.text = text;
      this.currentPosition = startPosition;
-     this.resumePosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
+     this.currentText = text.slice(startPosition);
+     this.startTime = Date.now();
+     this.pausedPosition = startPosition;
 
-     if (this.isMobile && this.mobileSpeech) {
-       this.speaking = true;
+     if (this.isAndroidChrome) {
+       // Usar SpeechSynthesis nativo para Android Chrome
+       this.androidSpeech.cancel();
        
-       // Asegurar que se detenga cualquier lectura anterior
-       await this.mobileSpeech.cancel();
+       const utterance = new SpeechSynthesisUtterance(this.currentText);
+       utterance.lang = 'en-US';
+       utterance.rate = rate;
+       
+       utterance.onend = () => {
+         if (!this.isPaused && this.onEndCallback) {
+           this.onEndCallback();
+         }
+       };
 
-       // Calcular el texto a leer desde la posición actual
-       const textToSpeak = text.slice(this.resumePosition);
+       this.utterance = utterance;
+       this.androidSpeech.speak(utterance);
        
+     } else if (this.isMobile && this.mobileSpeech) {
        await this.mobileSpeech.speak({
-         text: textToSpeak,
+         text: this.currentText,
          queue: false,
          rate: rate,
          listeners: {
-           onstart: () => {
-             console.log('Iniciando lectura desde posición:', this.resumePosition);
-           },
            onend: () => {
              if (!this.isPaused && this.onEndCallback) {
-               this.speaking = false;
-               this.resumePosition = 0;
                this.onEndCallback();
              }
-           },
-           onpause: () => {
-             console.log('Lectura pausada en posición:', this.resumePosition);
-           },
-           onresume: () => {
-             console.log('Lectura resumida desde:', this.resumePosition);
            }
          }
        });
-
      } else {
        // Mantener el comportamiento original para desktop que funciona perfectamente
        window.speechSynthesis.cancel();
@@ -145,90 +153,107 @@ class ChromeSpeechService {
    }
  }
 
+ calculatePausedPosition() {
+   const elapsedTime = Date.now() - this.startTime;
+   const wordsPerMinute = 160 * this.currentRate; // Promedio de palabras por minuto
+   const charactersPerMinute = wordsPerMinute * 5; // Estimación de 5 caracteres por palabra
+   const charactersPerMillisecond = charactersPerMinute / (60 * 1000);
+   const estimatedPosition = Math.floor(elapsedTime * charactersPerMillisecond);
+   
+   return Math.min(this.currentText.length, this.pausedPosition + estimatedPosition);
+ }
+
  pause() {
-   if (this.isMobile && this.mobileSpeech) {
-     try {
-       if (this.speaking) {
-         // Obtener la posición aproximada basada en el tiempo transcurrido
-         const elapsed = this.mobileSpeech.spoken ? this.mobileSpeech.elapsed() : 0;
-         const approxCharsPerSecond = 15; // Aproximación de caracteres por segundo
-         const approximatePosition = Math.floor(elapsed / 1000 * approxCharsPerSecond);
-         
-         this.resumePosition = this.currentPosition + approximatePosition;
-         this.mobileSpeech.pause();
-         this.isPaused = true;
-         this.speaking = false;
-         
-         console.log('Pausa en posición aproximada:', this.resumePosition);
-       }
-     } catch (error) {
-       console.error('Error al pausar en móvil:', error);
-     }
-   } else {
-     window.speechSynthesis.pause();
-     if (this.onWordCallback) {
-       this.onWordCallback(null);
-     }
-     if (this.keepAliveInterval) {
-       clearInterval(this.keepAliveInterval);
-     }
+   try {
      this.isPaused = true;
+     if (this.isAndroidChrome) {
+       this.pausedPosition = this.calculatePausedPosition();
+       this.androidSpeech.pause();
+       this.pausedTime = Date.now();
+     } else if (this.isMobile && this.mobileSpeech) {
+       this.mobileSpeech.pause();
+     } else {
+       window.speechSynthesis.pause();
+       if (this.onWordCallback) {
+         this.onWordCallback(null);
+       }
+       if (this.keepAliveInterval) {
+         clearInterval(this.keepAliveInterval);
+       }
+     }
+   } catch (error) {
+     console.error('Error en pause:', error);
    }
  }
 
  resume() {
-   if (this.isMobile && this.mobileSpeech) {
-     try {
-       if (this.isPaused) {
-         console.log('Intentando reanudar desde:', this.resumePosition);
+   try {
+     if (this.isPaused) {
+       if (this.isAndroidChrome) {
+         const remainingText = this.currentText.slice(this.pausedPosition);
+         this.androidSpeech.cancel();
          
-         // Usar el método speak con la posición guardada
-         this.speak(this.text, this.resumePosition, this.currentRate);
+         const utterance = new SpeechSynthesisUtterance(remainingText);
+         utterance.lang = 'en-US';
+         utterance.rate = this.currentRate;
          
-         this.isPaused = false;
-         this.speaking = true;
-       }
-     } catch (error) {
-       console.error('Error al reanudar en móvil:', error);
-     }
-   } else {
-     window.speechSynthesis.resume();
-     if (this.isChrome) {
-       this.keepAliveInterval = setInterval(() => {
-         if (window.speechSynthesis.speaking && !this.isPaused) {
-           window.speechSynthesis.pause();
-           window.speechSynthesis.resume();
+         utterance.onend = () => {
+           if (!this.isPaused && this.onEndCallback) {
+             this.onEndCallback();
+           }
+         };
+
+         this.utterance = utterance;
+         this.androidSpeech.speak(utterance);
+         this.startTime = Date.now() - this.pausedTime;
+         
+       } else if (this.isMobile && this.mobileSpeech) {
+         this.mobileSpeech.resume();
+       } else {
+         window.speechSynthesis.resume();
+         if (this.isChrome) {
+           this.keepAliveInterval = setInterval(() => {
+             if (window.speechSynthesis.speaking && !this.isPaused) {
+               window.speechSynthesis.pause();
+               window.speechSynthesis.resume();
+             }
+           }, 14000);
          }
-       }, 14000);
+       }
+       this.isPaused = false;
      }
-     this.isPaused = false;
+   } catch (error) {
+     console.error('Error en resume:', error);
    }
  }
 
  stop() {
-   if (this.isMobile && this.mobileSpeech) {
-     try {
+   try {
+     if (this.isAndroidChrome) {
+       this.androidSpeech.cancel();
+       this.pausedPosition = 0;
+     } else if (this.isMobile && this.mobileSpeech) {
        this.mobileSpeech.cancel();
-       this.isPaused = false;
-       this.speaking = false;
-       this.resumePosition = 0;
-     } catch (error) {
-       console.error('Error al detener en móvil:', error);
+     } else {
+       window.speechSynthesis.cancel();
+       if (this.onWordCallback) {
+         this.onWordCallback(null);
+       }
+       if (this.keepAliveInterval) {
+         clearInterval(this.keepAliveInterval);
+       }
      }
-   } else {
-     window.speechSynthesis.cancel();
-     if (this.onWordCallback) {
-       this.onWordCallback(null);
-     }
-     if (this.keepAliveInterval) {
-       clearInterval(this.keepAliveInterval);
-     }
+     this.currentPosition = 0;
+     this.utterance = null;
+     this.isPaused = false;
+     this.startTime = 0;
+     this.pausedTime = 0;
+   } catch (error) {
+     console.error('Error en stop:', error);
    }
-   this.currentPosition = 0;
-   this.utterance = null;
-   this.isPaused = false;
  }
 
+ // El resto de métodos se mantienen igual...
  getCurrentWord(text, charIndex) {
    try {
      if (!text || typeof charIndex !== 'number') return null;
