@@ -12,31 +12,40 @@ class ChromeSpeechService {
    this.isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
    this.keepAliveInterval = null;
+   this.mobileSpeech = null;
    this.currentRate = 1.0;
-   this.lastPosition = 0;
-   this.mobileVoice = null;
+   this.resumePosition = 0;
 
    if (this.isMobile) {
-     this.initializeMobileVoice();
+     this.initializeMobileSpeech();
    }
  }
 
- async initializeMobileVoice() {
+ async initializeMobileSpeech() {
    try {
-     // Cargar ResponsiveVoice dinámicamente
-     const script = document.createElement('script');
-     script.src = `https://code.responsivevoice.org/responsivevoice.js?key=${import.meta.env.VITE_RESPONSIVE_VOICE_KEY}`;
-     script.async = true;
-     
-     script.onload = () => {
-       this.mobileVoice = window.responsiveVoice;
-       this.mobileVoice.init();
-       console.log("Mobile voice está listo");
-     };
-     
-     document.head.appendChild(script);
+     this.mobileSpeech = new Speech();
+     await this.mobileSpeech.init({
+       volume: 1,
+       lang: 'en-US',
+       rate: 1,
+       pitch: 1,
+       splitSentences: true, // Dividir en oraciones para mejor control
+       listeners: {
+         onvoiceschanged: (voices) => {
+           // Intentar establecer una voz en inglés específica
+           const englishVoice = voices.find(voice => 
+             voice.lang.includes('en-US')
+           );
+           
+           if (englishVoice) {
+             this.mobileSpeech.setVoice(englishVoice.name);
+           }
+         }
+       }
+     });
+     console.log("Speech está listo");
    } catch (error) {
-     console.error("Error inicializando mobile voice:", error);
+     console.error("Error inicializando speech:", error);
    }
  }
 
@@ -44,35 +53,35 @@ class ChromeSpeechService {
    try {
      this.text = text;
      this.currentPosition = startPosition;
-     this.lastPosition = startPosition;
+     this.resumePosition = startPosition;
      this.isPaused = false;
      this.currentRate = rate;
 
-     if (this.isMobile && this.mobileVoice) {
-       // Asegurarse de que no haya una reproducción previa
-       this.mobileVoice.cancel();
-       
-       // Preparar el texto desde la posición actual
+     if (this.isMobile && this.mobileSpeech) {
+       // Asegurarse de que no haya una instancia previa hablando
+       this.mobileSpeech.cancel();
+
+       // Dividir el texto en oraciones más manejables
        const textToSpeak = text.slice(startPosition);
        
-       this.mobileVoice.speak(textToSpeak, "US English Female", {
+       await this.mobileSpeech.speak({
+         text: textToSpeak,
+         queue: false,
          rate: rate,
-         pitch: 1,
-         volume: 1,
-         onstart: () => {
-           console.log('Iniciando lectura móvil');
-         },
-         onend: () => {
-           if (!this.isPaused && this.onEndCallback) {
-             this.onEndCallback();
+         listeners: {
+           onstart: () => {
+             console.log('Iniciando lectura móvil desde:', startPosition);
+           },
+           onend: () => {
+             if (!this.isPaused && this.onEndCallback) {
+               this.onEndCallback();
+             }
+           },
+           onboundary: (event) => {
+             if (!this.isPaused) {
+               this.currentPosition = startPosition + (event.charIndex || 0);
+             }
            }
-         },
-         onpause: () => {
-           this.lastPosition = this.currentPosition;
-           console.log('Lectura pausada en:', this.lastPosition);
-         },
-         onresume: () => {
-           console.log('Reanudando desde:', this.lastPosition);
          }
        });
 
@@ -144,10 +153,13 @@ class ChromeSpeechService {
 
  pause() {
    try {
-     if (this.isMobile && this.mobileVoice) {
-       if (this.mobileVoice.isPlaying()) {
-         this.mobileVoice.pause();
+     if (this.isMobile && this.mobileSpeech) {
+       if (this.mobileSpeech.speaking()) {
+         // Guardar la posición actual antes de pausar
+         this.resumePosition = this.currentPosition;
+         this.mobileSpeech.pause();
          this.isPaused = true;
+         console.log('Audio pausado en posición:', this.resumePosition);
        }
      } else {
        window.speechSynthesis.pause();
@@ -166,22 +178,10 @@ class ChromeSpeechService {
 
  resume() {
    try {
-     if (this.isMobile && this.mobileVoice) {
-       if (this.isPaused) {
-         // Reanudar desde la última posición conocida
-         const remainingText = this.text.slice(this.lastPosition);
-         this.mobileVoice.speak(remainingText, "US English Female", {
-           rate: this.currentRate,
-           pitch: 1,
-           volume: 1,
-           onend: () => {
-             if (!this.isPaused && this.onEndCallback) {
-               this.onEndCallback();
-             }
-           }
-         });
-         this.isPaused = false;
-       }
+     if (this.isMobile && this.mobileSpeech && this.isPaused) {
+       // Reanudar desde la última posición guardada
+       const remainingText = this.text.slice(this.resumePosition);
+       this.speak(this.text, this.resumePosition, this.currentRate);
      } else {
        window.speechSynthesis.resume();
        if (this.isChrome) {
@@ -201,10 +201,10 @@ class ChromeSpeechService {
 
  stop() {
    try {
-     if (this.isMobile && this.mobileVoice) {
-       this.mobileVoice.cancel();
+     if (this.isMobile && this.mobileSpeech) {
+       this.mobileSpeech.cancel();
        this.isPaused = false;
-       this.lastPosition = 0;
+       this.resumePosition = 0;
      } else {
        window.speechSynthesis.cancel();
        if (this.onWordCallback) {
