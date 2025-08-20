@@ -32,9 +32,11 @@ const BookReader = () => {
   const [pageInputValue, setPageInputValue] = useState('');
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState(null);
-  // Nuevo estado para rastrear las palabras seleccionadas
+  // Estados para rastrear las palabras seleccionadas
   const [selectedWordRange, setSelectedWordRange] = useState({ first: -1, last: -1 });
   const [currentMousePosition, setCurrentMousePosition] = useState(null);
+  // Estado para detectar si estamos en un dispositivo táctil
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
   const { darkMode } = useTheme();
   
   const {
@@ -48,6 +50,20 @@ const BookReader = () => {
   } = useBook();
 
   const currentPageText = currentBook?.content?.find(p => p.pageNumber === currentPage)?.text || '';
+
+  // Detectar si estamos en un dispositivo táctil
+  useEffect(() => {
+    const detectTouch = () => {
+      setIsTouchDevice(true);
+      window.removeEventListener('touchstart', detectTouch);
+    };
+    
+    window.addEventListener('touchstart', detectTouch);
+    
+    return () => {
+      window.removeEventListener('touchstart', detectTouch);
+    };
+  }, []);
 
   useEffect(() => {
     ChromeSpeechService.setOnProgress(setProgress);
@@ -136,7 +152,7 @@ const BookReader = () => {
     ctx.font = `${fontSize}px Arial`;
     pageLayoutRef.current.words.forEach((wordInfo, index) => {
       // Dibujar highlight para palabras seleccionadas
-      if (isSelecting && selectedWordRange.first !== -1 && selectedWordRange.last !== -1) {
+      if (selectedWordRange.first !== -1 && selectedWordRange.last !== -1) {
         if (index >= selectedWordRange.first && index <= selectedWordRange.last) {
           ctx.fillStyle = darkMode ? 'rgba(59, 130, 246, 0.5)' : 'rgba(253, 224, 71, 0.5)';
           ctx.fillRect(wordInfo.x, wordInfo.y - fontSize + 2, wordInfo.width, fontSize + 4);
@@ -156,7 +172,7 @@ const BookReader = () => {
       ctx.fillStyle = darkMode ? '#FFFFFF' : '#000000';
       ctx.fillText(wordInfo.word, wordInfo.x, wordInfo.y);
     });
-  }, [fontSize, darkMode, highlightedWordInfo, calculatePageLayout, isSelecting, selectedWordRange]);
+  }, [fontSize, darkMode, highlightedWordInfo, calculatePageLayout, selectedWordRange]);
 
   useEffect(() => {
     pageLayoutRef.current.isLayoutCalculated = false;
@@ -203,44 +219,48 @@ const BookReader = () => {
     }
   }, [isPlaying, isSlow, currentPageText]);
 
-  // Manejador para clic en una sola palabra
-  const handleSingleWordClick = (e) => {
+  // Función para convertir coordenadas de pantalla a coordenadas del canvas
+  const getCanvasCoordinates = (clientX, clientY) => {
     const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return {
+      x: (clientX - rect.left) * (canvas.width / rect.width),
+      y: (clientY - rect.top) * (canvas.height / rect.height)
+    };
+  };
 
-    const clickedWord = wordPositions.find(pos => 
+  // Función para encontrar la palabra en una posición específica
+  const findWordAtPosition = (x, y) => {
+    return wordPositions.find(pos => 
       x >= pos.x && 
       x <= pos.x + pos.width &&
       y >= pos.y - pos.height &&
       y <= pos.y
     );
+  };
+
+  // Manejador para clic en una sola palabra
+  const handleSingleWordClick = (clientX, clientY) => {
+    const { x, y } = getCanvasCoordinates(clientX, clientY);
+    const clickedWord = findWordAtPosition(x, y);
 
     if (clickedWord) {
       setSelectedWord(clickedWord.word);
       setModalPosition({
-        x: e.clientX,
-        y: e.clientY
+        x: clientX,
+        y: clientY
       });
       // Limpiar selección
       setSelectedWordRange({ first: -1, last: -1 });
     }
   };
 
-  // Manejador para iniciar la selección
+  // Manejador para iniciar la selección (mouse)
   const handleCanvasMouseDown = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-    const clickedWord = wordPositions.find(pos => 
-      x >= pos.x && 
-      x <= pos.x + pos.width &&
-      y >= pos.y - pos.height &&
-      y <= pos.y
-    );
+    const { x, y } = getCanvasCoordinates(e.clientX, e.clientY);
+    const clickedWord = findWordAtPosition(x, y);
 
     if (clickedWord) {
       setIsSelecting(true);
@@ -254,19 +274,10 @@ const BookReader = () => {
   const handleCanvasMouseMove = (e) => {
     if (!isSelecting || !selectionStart) return;
 
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
+    const { x, y } = getCanvasCoordinates(e.clientX, e.clientY);
     setCurrentMousePosition({ x, y });
 
-    const currentWord = wordPositions.find(pos => 
-      x >= pos.x && 
-      x <= pos.x + pos.width &&
-      y >= pos.y - pos.height &&
-      y <= pos.y
-    );
+    const currentWord = findWordAtPosition(x, y);
 
     if (currentWord) {
       const startIndex = wordPositions.findIndex(w => w === selectionStart);
@@ -281,25 +292,16 @@ const BookReader = () => {
     }
   };
 
-  // Manejador para finalizar la selección
+  // Manejador para finalizar la selección (mouse)
   const handleCanvasMouseUp = (e) => {
     if (!isSelecting || !selectionStart) {
       // Si no estamos seleccionando o no hay palabra inicial, tratar como clic simple
-      handleSingleWordClick(e);
+      handleSingleWordClick(e.clientX, e.clientY);
       return;
     }
 
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-    const endWord = wordPositions.find(pos => 
-      x >= pos.x && 
-      x <= pos.x + pos.width &&
-      y >= pos.y - pos.height &&
-      y <= pos.y
-    );
+    const { x, y } = getCanvasCoordinates(e.clientX, e.clientY);
+    const endWord = findWordAtPosition(x, y);
 
     if (endWord && selectionStart !== endWord) {
       // Selección de frase
@@ -325,13 +327,105 @@ const BookReader = () => {
       setSelectedWordRange({ first, last });
     } else {
       // Si solo se seleccionó una palabra, tratarla como clic simple
-      handleSingleWordClick(e);
+      handleSingleWordClick(e.clientX, e.clientY);
     }
     
     // Resetear el estado de selección
     setIsSelecting(false);
     setSelectionStart(null);
     setCurrentMousePosition(null);
+  };
+
+  // Manejadores para eventos táctiles
+  const handleTouchStart = (e) => {
+    if (e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+    const touchedWord = findWordAtPosition(x, y);
+
+    if (touchedWord) {
+      setIsSelecting(true);
+      setSelectionStart(touchedWord);
+      const startIndex = wordPositions.findIndex(w => w === touchedWord);
+      setSelectedWordRange({ first: startIndex, last: startIndex });
+    }
+    
+    // Prevenir el comportamiento por defecto para evitar el zoom
+    e.preventDefault();
+  };
+
+  const handleTouchMove = (e) => {
+    if (!isSelecting || !selectionStart || e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+    
+    const currentWord = findWordAtPosition(x, y);
+    
+    if (currentWord) {
+      const startIndex = wordPositions.findIndex(w => w === selectionStart);
+      const currentIndex = wordPositions.findIndex(w => w === currentWord);
+      
+      // Asegurar que el orden sea correcto (inicio a fin)
+      const [first, last] = startIndex <= currentIndex 
+        ? [startIndex, currentIndex] 
+        : [currentIndex, startIndex];
+      
+      setSelectedWordRange({ first, last });
+    }
+    
+    // Prevenir el comportamiento por defecto para evitar el scroll
+    e.preventDefault();
+  };
+
+  const handleTouchEnd = (e) => {
+    if (!isSelecting || !selectionStart) {
+      // Si no hay selección activa, tratar como un toque simple
+      if (e.changedTouches.length === 1) {
+        const touch = e.changedTouches[0];
+        handleSingleWordClick(touch.clientX, touch.clientY);
+      }
+      return;
+    }
+    
+    // Obtener el último toque
+    if (e.changedTouches.length === 1) {
+      const touch = e.changedTouches[0];
+      const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+      const endWord = findWordAtPosition(x, y);
+      
+      if (endWord && selectionStart !== endWord) {
+        // Selección de frase
+        const startIndex = wordPositions.findIndex(w => w === selectionStart);
+        const endIndex = wordPositions.findIndex(w => w === endWord);
+        
+        // Asegurar que el orden sea correcto (inicio a fin)
+        const [first, last] = startIndex <= endIndex 
+          ? [startIndex, endIndex] 
+          : [endIndex, startIndex];
+        
+        // Construir la frase seleccionada
+        const selectedWords = wordPositions.slice(first, last + 1).map(w => w.word);
+        const phrase = selectedWords.join(' ');
+        
+        setSelectedWord(phrase);
+        setModalPosition({
+          x: touch.clientX,
+          y: touch.clientY
+        });
+        
+        // Mantener el resaltado hasta que se cierre el modal
+        setSelectedWordRange({ first, last });
+      } else {
+        // Si solo se seleccionó una palabra, tratarla como toque simple
+        handleSingleWordClick(touch.clientX, touch.clientY);
+      }
+    }
+    
+    // Resetear el estado de selección
+    setIsSelecting(false);
+    setSelectionStart(null);
   };
 
   const handlePageInputChange = (e) => {
@@ -467,6 +561,9 @@ const BookReader = () => {
           onMouseDown={handleCanvasMouseDown}
           onMouseMove={handleCanvasMouseMove}
           onMouseUp={handleCanvasMouseUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
           className="w-full h-full bg-white dark:bg-gray-900"
           width={800}
           height={1200}
