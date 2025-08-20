@@ -9,7 +9,8 @@ import {
   Play,
   Pause,
   Clock,
-  Square
+  Square,
+  CornerDownRight
 } from 'lucide-react';
 import TranslationModal from './translation/TranslationModal';
 import AudioProgressBar from './ui/AudioProgressBar';
@@ -28,6 +29,7 @@ const BookReader = () => {
   const [progress, setProgress] = useState(0);
   const [highlightedWordInfo, setHighlightedWordInfo] = useState(null);
   const [wordPositions, setWordPositions] = useState([]);
+  const [pageInputValue, setPageInputValue] = useState('');
   const { darkMode } = useTheme();
   
   const {
@@ -37,6 +39,7 @@ const BookReader = () => {
     setFontSize,
     nextPage,
     previousPage,
+    setCurrentPage
   } = useBook();
 
   const currentPageText = currentBook?.content?.find(p => p.pageNumber === currentPage)?.text || '';
@@ -210,6 +213,28 @@ const BookReader = () => {
     }
   };
 
+  const handlePageInputChange = (e) => {
+    setPageInputValue(e.target.value);
+  };
+
+  const handleGoToPage = () => {
+    const pageNumber = parseInt(pageInputValue, 10);
+    if (
+      !isNaN(pageNumber) && 
+      pageNumber >= 1 && 
+      pageNumber <= (currentBook?.content?.length || 1)
+    ) {
+      setCurrentPage(pageNumber);
+      setPageInputValue('');
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      handleGoToPage();
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900 rounded-lg shadow-lg">
       <div className="flex flex-col p-4 border-b dark:border-gray-700">
@@ -232,6 +257,25 @@ const BookReader = () => {
             >
               <ChevronRight className="w-6 h-6" />
             </button>
+            
+            {/* Nuevo campo para salto de página */}
+            <div className="flex items-center ml-4">
+              <input
+                type="text"
+                value={pageInputValue}
+                onChange={handlePageInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Ir a página..."
+                className="w-24 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+              <button
+                onClick={handleGoToPage}
+                className="p-2 ml-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                title="Ir a página"
+              >
+                <CornerDownRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center space-x-4">
