@@ -18,6 +18,7 @@ import ChromeSpeechService from '../services/ChromeSpeechService';
 
 const BookReader = () => {
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const pageLayoutRef = useRef({
     words: [],
     isLayoutCalculated: false
@@ -37,6 +38,8 @@ const BookReader = () => {
   const [currentMousePosition, setCurrentMousePosition] = useState(null);
   // Estado para detectar si estamos en un dispositivo táctil
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+  // Estado para controlar la altura del canvas
+  const [canvasHeight, setCanvasHeight] = useState(1200);
   const { darkMode } = useTheme();
   
   const {
@@ -130,12 +133,46 @@ const BookReader = () => {
       x += metrics.width + ctx.measureText(' ').width;
     });
 
+    // Calcular la altura necesaria para el canvas basado en la última palabra
+    const lastWord = newWordPositions[newWordPositions.length - 1];
+    const requiredHeight = lastWord ? lastWord.y + lineHeight * 2 : 1200;
+    
+    // Actualizar la altura del canvas si es necesario
+    if (requiredHeight > canvasHeight) {
+      setCanvasHeight(requiredHeight);
+    }
+
     pageLayoutRef.current = {
       words: newWordPositions,
       isLayoutCalculated: true
     };
     setWordPositions(newWordPositions);
-  }, [currentBook, currentPage, fontSize]);
+  }, [currentBook, currentPage, fontSize, canvasHeight]);
+
+  // Ajustar el tamaño del canvas cuando cambia el tamaño de la ventana
+  useEffect(() => {
+    const handleResize = () => {
+      if (containerRef.current && canvasRef.current) {
+        const containerWidth = containerRef.current.clientWidth;
+        canvasRef.current.width = containerWidth;
+        pageLayoutRef.current.isLayoutCalculated = false;
+        calculatePageLayout();
+      }
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [calculatePageLayout]);
+
+  // Resetear la altura del canvas cuando cambia la página o el tamaño de fuente
+  useEffect(() => {
+    setCanvasHeight(1200);
+    pageLayoutRef.current.isLayoutCalculated = false;
+  }, [currentPage, fontSize]);
 
   const drawPage = useCallback(() => {
     if (!canvasRef.current) return;
@@ -555,7 +592,10 @@ const BookReader = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden p-4">
+      <div 
+        ref={containerRef} 
+        className="flex-1 overflow-auto p-4"
+      >
         <canvas
           ref={canvasRef}
           onMouseDown={handleCanvasMouseDown}
@@ -564,9 +604,9 @@ const BookReader = () => {
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          className="w-full h-full bg-white dark:bg-gray-900"
+          className="w-full bg-white dark:bg-gray-900"
           width={800}
-          height={1200}
+          height={canvasHeight}
         />
       </div>
 
