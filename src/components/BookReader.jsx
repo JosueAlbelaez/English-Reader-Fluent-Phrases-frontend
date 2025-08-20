@@ -44,6 +44,8 @@ const BookReader = () => {
   const [touchStartPosition, setTouchStartPosition] = useState(null);
   const [isScrolling, setIsScrolling] = useState(false);
   const [lastTouchTime, setLastTouchTime] = useState(0);
+  // Estado para controlar la posición de visualización
+  const [scrollPosition, setScrollPosition] = useState(0);
   
   const { darkMode } = useTheme();
   
@@ -177,7 +179,34 @@ const BookReader = () => {
   useEffect(() => {
     setCanvasHeight(1200);
     pageLayoutRef.current.isLayoutCalculated = false;
+    // Resetear la posición de scroll al cambiar de página
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0;
+      setScrollPosition(0);
+    }
   }, [currentPage, fontSize]);
+
+  // Manejar eventos de scroll para mantener el renderizado
+  useEffect(() => {
+    const handleScroll = () => {
+      if (containerRef.current) {
+        setScrollPosition(containerRef.current.scrollTop);
+        // Forzar un re-renderizado del canvas durante el scroll
+        drawPage();
+      }
+    };
+
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('scroll', handleScroll);
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, []);
 
   const drawPage = useCallback(() => {
     if (!canvasRef.current) return;
@@ -224,7 +253,7 @@ const BookReader = () => {
   useEffect(() => {
     const animationFrameId = requestAnimationFrame(drawPage);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [drawPage]);
+  }, [drawPage, scrollPosition]); // Añadir scrollPosition como dependencia
 
   const handlePlayPause = useCallback(() => {
     if (!currentPageText) return;
@@ -269,7 +298,7 @@ const BookReader = () => {
     const rect = canvas.getBoundingClientRect();
     return {
       x: (clientX - rect.left) * (canvas.width / rect.width),
-      y: (clientY - rect.top) * (canvas.height / rect.height)
+      y: (clientY - rect.top) * (canvas.height / rect.height) + scrollPosition
     };
   };
 
@@ -682,6 +711,11 @@ const BookReader = () => {
       <div 
         ref={containerRef} 
         className="flex-1 overflow-auto p-4"
+        onScroll={() => {
+          if (containerRef.current) {
+            setScrollPosition(containerRef.current.scrollTop);
+          }
+        }}
       >
         <canvas
           ref={canvasRef}
@@ -695,6 +729,7 @@ const BookReader = () => {
           className="w-full bg-white dark:bg-gray-900"
           width={800}
           height={canvasHeight}
+          style={{ transform: 'translateZ(0)' }} // Forzar aceleración por hardware
         />
       </div>
 
