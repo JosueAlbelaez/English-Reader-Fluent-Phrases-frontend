@@ -30,6 +30,9 @@ const BookReader = () => {
   const [highlightedWordInfo, setHighlightedWordInfo] = useState(null);
   const [wordPositions, setWordPositions] = useState([]);
   const [pageInputValue, setPageInputValue] = useState('');
+  // Añadir estados faltantes para la selección de texto
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState(null);
   const { darkMode } = useTheme();
   
   const {
@@ -191,7 +194,8 @@ const BookReader = () => {
     }
   }, [isPlaying, isSlow, currentPageText]);
 
-  const handleCanvasClick = (e) => {
+  // Manejador para clic en una sola palabra
+  const handleSingleWordClick = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
@@ -211,6 +215,72 @@ const BookReader = () => {
         y: e.clientY
       });
     }
+  };
+
+  // Manejador para iniciar la selección
+  const handleCanvasMouseDown = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    const clickedWord = wordPositions.find(pos => 
+      x >= pos.x && 
+      x <= pos.x + pos.width &&
+      y >= pos.y - pos.height &&
+      y <= pos.y
+    );
+
+    if (clickedWord) {
+      setIsSelecting(true);
+      setSelectionStart(clickedWord);
+    }
+  };
+
+  // Manejador para finalizar la selección
+  const handleCanvasMouseUp = (e) => {
+    if (!isSelecting || !selectionStart) {
+      // Si no estamos seleccionando o no hay palabra inicial, tratar como clic simple
+      handleSingleWordClick(e);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    const endWord = wordPositions.find(pos => 
+      x >= pos.x && 
+      x <= pos.x + pos.width &&
+      y >= pos.y - pos.height &&
+      y <= pos.y
+    );
+
+    if (endWord && selectionStart !== endWord) {
+      // Selección de frase
+      const startIndex = wordPositions.findIndex(w => w === selectionStart);
+      const endIndex = wordPositions.findIndex(w => w === endWord);
+      
+      // Asegurar que el orden sea correcto (inicio a fin)
+      const [first, last] = startIndex <= endIndex 
+        ? [startIndex, endIndex] 
+        : [endIndex, startIndex];
+      
+      // Construir la frase seleccionada
+      const selectedWords = wordPositions.slice(first, last + 1).map(w => w.word);
+      const phrase = selectedWords.join(' ');
+      
+      setSelectedWord(phrase);
+      setModalPosition({
+        x: e.clientX,
+        y: e.clientY
+      });
+    }
+    
+    // Resetear el estado de selección
+    setIsSelecting(false);
+    setSelectionStart(null);
   };
 
   const handlePageInputChange = (e) => {
@@ -258,7 +328,7 @@ const BookReader = () => {
               <ChevronRight className="w-6 h-6" />
             </button>
             
-            {/* Nuevo campo para salto de página */}
+            {/* Campo para salto de página */}
             <div className="flex items-center ml-4">
               <input
                 type="text"
@@ -337,7 +407,8 @@ const BookReader = () => {
       <div className="flex-1 overflow-hidden p-4">
         <canvas
           ref={canvasRef}
-          onClick={handleCanvasClick}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseUp={handleCanvasMouseUp}
           className="w-full h-full bg-white dark:bg-gray-900"
           width={800}
           height={1200}
