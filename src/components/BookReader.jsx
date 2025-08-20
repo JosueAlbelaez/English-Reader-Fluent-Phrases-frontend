@@ -30,9 +30,11 @@ const BookReader = () => {
   const [highlightedWordInfo, setHighlightedWordInfo] = useState(null);
   const [wordPositions, setWordPositions] = useState([]);
   const [pageInputValue, setPageInputValue] = useState('');
-  // Añadir estados faltantes para la selección de texto
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState(null);
+  // Nuevo estado para rastrear las palabras seleccionadas
+  const [selectedWordRange, setSelectedWordRange] = useState({ first: -1, last: -1 });
+  const [currentMousePosition, setCurrentMousePosition] = useState(null);
   const { darkMode } = useTheme();
   
   const {
@@ -132,9 +134,16 @@ const BookReader = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     ctx.font = `${fontSize}px Arial`;
-    pageLayoutRef.current.words.forEach((wordInfo) => {
-      // Dibujar highlight si corresponde
-      if (highlightedWordInfo && 
+    pageLayoutRef.current.words.forEach((wordInfo, index) => {
+      // Dibujar highlight para palabras seleccionadas
+      if (isSelecting && selectedWordRange.first !== -1 && selectedWordRange.last !== -1) {
+        if (index >= selectedWordRange.first && index <= selectedWordRange.last) {
+          ctx.fillStyle = darkMode ? 'rgba(59, 130, 246, 0.5)' : 'rgba(253, 224, 71, 0.5)';
+          ctx.fillRect(wordInfo.x, wordInfo.y - fontSize + 2, wordInfo.width, fontSize + 4);
+        }
+      }
+      // Dibujar highlight para reproducción de audio
+      else if (highlightedWordInfo && 
           highlightedWordInfo.start !== undefined && 
           highlightedWordInfo.end !== undefined &&
           wordInfo.start >= highlightedWordInfo.start && 
@@ -147,7 +156,7 @@ const BookReader = () => {
       ctx.fillStyle = darkMode ? '#FFFFFF' : '#000000';
       ctx.fillText(wordInfo.word, wordInfo.x, wordInfo.y);
     });
-  }, [fontSize, darkMode, highlightedWordInfo, calculatePageLayout]);
+  }, [fontSize, darkMode, highlightedWordInfo, calculatePageLayout, isSelecting, selectedWordRange]);
 
   useEffect(() => {
     pageLayoutRef.current.isLayoutCalculated = false;
@@ -214,6 +223,8 @@ const BookReader = () => {
         x: e.clientX,
         y: e.clientY
       });
+      // Limpiar selección
+      setSelectedWordRange({ first: -1, last: -1 });
     }
   };
 
@@ -234,6 +245,39 @@ const BookReader = () => {
     if (clickedWord) {
       setIsSelecting(true);
       setSelectionStart(clickedWord);
+      const startIndex = wordPositions.findIndex(w => w === clickedWord);
+      setSelectedWordRange({ first: startIndex, last: startIndex });
+    }
+  };
+
+  // Manejador para movimiento del mouse durante la selección
+  const handleCanvasMouseMove = (e) => {
+    if (!isSelecting || !selectionStart) return;
+
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    setCurrentMousePosition({ x, y });
+
+    const currentWord = wordPositions.find(pos => 
+      x >= pos.x && 
+      x <= pos.x + pos.width &&
+      y >= pos.y - pos.height &&
+      y <= pos.y
+    );
+
+    if (currentWord) {
+      const startIndex = wordPositions.findIndex(w => w === selectionStart);
+      const currentIndex = wordPositions.findIndex(w => w === currentWord);
+      
+      // Asegurar que el orden sea correcto (inicio a fin)
+      const [first, last] = startIndex <= currentIndex 
+        ? [startIndex, currentIndex] 
+        : [currentIndex, startIndex];
+      
+      setSelectedWordRange({ first, last });
     }
   };
 
@@ -276,11 +320,18 @@ const BookReader = () => {
         x: e.clientX,
         y: e.clientY
       });
+      
+      // Mantener el resaltado hasta que se cierre el modal
+      setSelectedWordRange({ first, last });
+    } else {
+      // Si solo se seleccionó una palabra, tratarla como clic simple
+      handleSingleWordClick(e);
     }
     
     // Resetear el estado de selección
     setIsSelecting(false);
     setSelectionStart(null);
+    setCurrentMousePosition(null);
   };
 
   const handlePageInputChange = (e) => {
@@ -303,6 +354,12 @@ const BookReader = () => {
     if (e.key === 'Enter') {
       handleGoToPage();
     }
+  };
+
+  // Limpiar selección cuando se cierra el modal
+  const handleCloseModal = () => {
+    setSelectedWord(null);
+    setSelectedWordRange({ first: -1, last: -1 });
   };
 
   return (
@@ -408,6 +465,7 @@ const BookReader = () => {
         <canvas
           ref={canvasRef}
           onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleCanvasMouseMove}
           onMouseUp={handleCanvasMouseUp}
           className="w-full h-full bg-white dark:bg-gray-900"
           width={800}
@@ -419,7 +477,7 @@ const BookReader = () => {
         <TranslationModal
           word={selectedWord}
           position={modalPosition}
-          onClose={() => setSelectedWord(null)}
+          onClose={handleCloseModal}
         />
       )}
     </div>
