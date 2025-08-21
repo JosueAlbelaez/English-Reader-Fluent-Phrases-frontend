@@ -186,116 +186,13 @@ const BookReader = () => {
     }
   }, [currentPage, fontSize]);
 
-  // Manejar eventos de scroll para mantener el renderizado
-  useEffect(() => {
-    const handleScroll = () => {
-      if (containerRef.current) {
-        setScrollPosition(containerRef.current.scrollTop);
-        // Forzar un re-renderizado del canvas durante el scroll
-        drawPage();
-      }
-    };
-
-    const container = containerRef.current;
-    if (container) {
-      container.addEventListener('scroll', handleScroll);
-    }
-
-    return () => {
-      if (container) {
-        container.removeEventListener('scroll', handleScroll);
-      }
-    };
-  }, []);
-
-  const drawPage = useCallback(() => {
-    if (!canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    
-    if (!pageLayoutRef.current.isLayoutCalculated) {
-      calculatePageLayout();
-    }
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    ctx.font = `${fontSize}px Arial`;
-    pageLayoutRef.current.words.forEach((wordInfo, index) => {
-      // Dibujar highlight para palabras seleccionadas
-      if (selectedWordRange.first !== -1 && selectedWordRange.last !== -1) {
-        if (index >= selectedWordRange.first && index <= selectedWordRange.last) {
-          ctx.fillStyle = darkMode ? 'rgba(59, 130, 246, 0.5)' : 'rgba(253, 224, 71, 0.5)';
-          ctx.fillRect(wordInfo.x, wordInfo.y - fontSize + 2, wordInfo.width, fontSize + 4);
-        }
-      }
-      // Dibujar highlight para reproducción de audio
-      else if (highlightedWordInfo && 
-          highlightedWordInfo.start !== undefined && 
-          highlightedWordInfo.end !== undefined &&
-          wordInfo.start >= highlightedWordInfo.start && 
-          wordInfo.end <= highlightedWordInfo.end) {
-        ctx.fillStyle = darkMode ? 'rgba(59, 130, 246, 0.5)' : 'rgba(253, 224, 71, 0.5)';
-        ctx.fillRect(wordInfo.x, wordInfo.y - fontSize + 2, wordInfo.width, fontSize + 4);
-      }
-
-      // Dibujar la palabra
-      ctx.fillStyle = darkMode ? '#FFFFFF' : '#000000';
-      ctx.fillText(wordInfo.word, wordInfo.x, wordInfo.y);
-    });
-  }, [fontSize, darkMode, highlightedWordInfo, calculatePageLayout, selectedWordRange]);
-
-  useEffect(() => {
-    pageLayoutRef.current.isLayoutCalculated = false;
-    calculatePageLayout();
-  }, [calculatePageLayout, currentBook, currentPage, fontSize]);
-
-  useEffect(() => {
-    const animationFrameId = requestAnimationFrame(drawPage);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [drawPage, scrollPosition]); // Añadir scrollPosition como dependencia
-
-  const handlePlayPause = useCallback(() => {
-    if (!currentPageText) return;
-
-    if (isPlaying) {
-      ChromeSpeechService.pause();
-      setIsPlaying(false);
-    } else {
-      const currentPosition = ChromeSpeechService.getCurrentPosition();
-      ChromeSpeechService.speak(currentPageText, currentPosition, isSlow ? 0.5 : 1.0);
-      setIsPlaying(true);
-    }
-  }, [isPlaying, currentPageText, isSlow]);
-
-  const handleStop = useCallback(() => {
-    ChromeSpeechService.stop();
-    setIsPlaying(false);
-    setProgress(0);
-    setHighlightedWordInfo(null);
-  }, []);
-
-  const toggleSpeed = useCallback(() => {
-    const wasPlaying = isPlaying;
-    if (wasPlaying) {
-      ChromeSpeechService.stop();
-      setIsPlaying(false);
-    }
-    setIsSlow(!isSlow);
-    if (wasPlaying) {
-      setTimeout(() => {
-        ChromeSpeechService.speak(currentPageText, 0, !isSlow ? 0.5 : 1.0);
-        setIsPlaying(true);
-      }, 50);
-    }
-  }, [isPlaying, isSlow, currentPageText]);
-
   // Función para convertir coordenadas de pantalla a coordenadas del canvas
   const getCanvasCoordinates = (clientX, clientY) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     
     const rect = canvas.getBoundingClientRect();
+    // Ajustar las coordenadas Y considerando el scrollPosition
     return {
       x: (clientX - rect.left) * (canvas.width / rect.width),
       y: (clientY - rect.top) * (canvas.height / rect.height) + scrollPosition
@@ -422,16 +319,28 @@ const BookReader = () => {
     
     const touch = e.touches[0];
     const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+    const touchedWord = findWordAtPosition(x, y);
     
-    // Guardar la posición inicial del toque
-    setTouchStartPosition({ x, y, clientX: touch.clientX, clientY: touch.clientY });
+    // Guardar la posición inicial del toque y la palabra tocada
+    setTouchStartPosition({ 
+      x, 
+      y, 
+      clientX: touch.clientX, 
+      clientY: touch.clientY,
+      word: touchedWord
+    });
     setLastTouchTime(Date.now());
     
     // Inicialmente no estamos ni seleccionando ni haciendo scroll
     setIsSelecting(false);
     setIsScrolling(false);
     
-    // No prevenir el comportamiento por defecto para permitir el scroll
+    // Si encontramos una palabra, iniciar potencial selección
+    if (touchedWord) {
+      setSelectionStart(touchedWord);
+      const startIndex = wordPositions.findIndex(w => w === touchedWord);
+      setSelectedWordRange({ first: startIndex, last: startIndex });
+    }
   };
 
   const handleTouchMove = (e) => {
@@ -450,32 +359,40 @@ const BookReader = () => {
     );
     
     // Umbral para considerar que es un scroll (en píxeles)
-    const scrollThreshold = 10;
+    const scrollThreshold = 15; // Aumentar el umbral para mejor detección
     
     // Si el movimiento supera el umbral, considerarlo como scroll
     if (distance > scrollThreshold) {
-      if (!isScrolling) {
-        setIsScrolling(true);
-        
-        // Si estábamos seleccionando, cancelar la selección
-        if (isSelecting) {
-          setIsSelecting(false);
-          setSelectionStart(null);
-          setSelectedWordRange({ first: -1, last: -1 });
-        }
-      }
+      // Verificar si el movimiento es más vertical que horizontal (scroll)
+      const deltaY = Math.abs(touch.clientY - touchStartPosition.clientY);
+      const deltaX = Math.abs(touch.clientX - touchStartPosition.clientX);
       
-      // No prevenir el comportamiento por defecto para permitir el scroll
-      return;
+      if (deltaY > deltaX * 1.5) { // Si es más vertical, es scroll
+        if (!isScrolling) {
+          setIsScrolling(true);
+          
+          // Si estábamos seleccionando, cancelar la selección
+          if (isSelecting) {
+            setIsSelecting(false);
+            setSelectionStart(null);
+            setSelectedWordRange({ first: -1, last: -1 });
+          }
+        }
+        return;
+      } else if (!isSelecting && touchStartPosition.word) {
+        // Si es más horizontal y tenemos una palabra inicial, iniciar selección
+        setIsSelecting(true);
+      }
     }
     
-    // Si no es scroll y ya estamos seleccionando, actualizar la selección
-    if (isSelecting && selectionStart && !isScrolling) {
+    // Si no es scroll y tenemos una palabra inicial, actualizar la selección
+    if (touchStartPosition.word && !isScrolling) {
       const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
       const currentWord = findWordAtPosition(x, y);
       
       if (currentWord) {
-        const startIndex = wordPositions.findIndex(w => w === selectionStart);
+        setIsSelecting(true);
+        const startIndex = wordPositions.findIndex(w => w === touchStartPosition.word);
         const currentIndex = wordPositions.findIndex(w => w === currentWord);
         
         // Asegurar que el orden sea correcto (inicio a fin)
@@ -503,60 +420,43 @@ const BookReader = () => {
     const touchDuration = Date.now() - lastTouchTime;
     const isTap = touchDuration < 300; // 300ms es un umbral común para un tap
     
-    if (e.changedTouches.length === 1 && touchStartPosition && isTap) {
+    if (e.changedTouches.length === 1 && touchStartPosition) {
       const touch = e.changedTouches[0];
-      const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
-      const touchedWord = findWordAtPosition(x, y);
       
-      // Si encontramos una palabra y fue un tap, mostrar la traducción
-      if (touchedWord) {
-        setSelectedWord(touchedWord.word);
+      // Si estábamos seleccionando y hay una selección válida
+      if (isSelecting && selectedWordRange.first !== -1 && selectedWordRange.last !== -1 && 
+          selectedWordRange.first !== selectedWordRange.last) {
+        
+        // Construir la frase seleccionada
+        const selectedWords = wordPositions
+          .slice(selectedWordRange.first, selectedWordRange.last + 1)
+          .map(w => w.word);
+        const phrase = selectedWords.join(' ');
+        
+        setSelectedWord(phrase);
         setModalPosition({
           x: touch.clientX,
           y: touch.clientY
         });
-        setSelectedWordRange({ first: -1, last: -1 });
         
-        // Prevenir el comportamiento por defecto solo para el tap en una palabra
+        // Prevenir el comportamiento por defecto para la selección
         e.preventDefault();
-      }
-    } else if (isSelecting && selectionStart) {
-      // Si estábamos seleccionando, finalizar la selección
-      if (e.changedTouches.length === 1) {
-        const touch = e.changedTouches[0];
-        const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
-        const endWord = findWordAtPosition(x, y);
+      } 
+      // Si fue un tap simple y no estábamos seleccionando
+      else if (isTap && !isSelecting && touchStartPosition.word) {
+        setSelectedWord(touchStartPosition.word.word);
+        setModalPosition({
+          x: touch.clientX,
+          y: touch.clientY
+        });
         
-        if (endWord && selectionStart !== endWord) {
-          // Selección de frase
-          const startIndex = wordPositions.findIndex(w => w === selectionStart);
-          const endIndex = wordPositions.findIndex(w => w === endWord);
-          
-          // Asegurar que el orden sea correcto (inicio a fin)
-          const [first, last] = startIndex <= endIndex 
-            ? [startIndex, endIndex] 
-            : [endIndex, startIndex];
-          
-          // Construir la frase seleccionada
-          const selectedWords = wordPositions.slice(first, last + 1).map(w => w.word);
-          const phrase = selectedWords.join(' ');
-          
-          setSelectedWord(phrase);
-          setModalPosition({
-            x: touch.clientX,
-            y: touch.clientY
-          });
-          
-          // Mantener el resaltado hasta que se cierre el modal
-          setSelectedWordRange({ first, last });
-          
-          // Prevenir el comportamiento por defecto solo para la selección
-          e.preventDefault();
-        }
+        // Prevenir el comportamiento por defecto para el tap
+        e.preventDefault();
       }
     }
     
-    // Resetear estados
+    // Mantener el resaltado hasta que se cierre el modal
+    // pero resetear los estados de selección
     setIsSelecting(false);
     setSelectionStart(null);
     setTouchStartPosition(null);
@@ -714,6 +614,8 @@ const BookReader = () => {
         onScroll={() => {
           if (containerRef.current) {
             setScrollPosition(containerRef.current.scrollTop);
+            // Forzar un re-renderizado durante el scroll
+            requestAnimationFrame(drawPage);
           }
         }}
       >
