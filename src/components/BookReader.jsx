@@ -29,7 +29,9 @@ const BookReader = () => {
   const touchStartRef = useRef(null);
   const touchTimeoutRef = useRef(null);
   const isTouchSelectionRef = useRef(false);
-  const lastTapTimeRef = useRef(0);
+  // Referencias adicionales para evitar parpadeo
+  const selectionRenderRef = useRef(null);
+  const isActivelySelectingRef = useRef(false);
 
   // Estados principales
   const [selectedWord, setSelectedWord] = useState(null);
@@ -335,6 +337,7 @@ const BookReader = () => {
     const clickedWord = findWordAtPosition(x, y);
 
     if (clickedWord) {
+      isActivelySelectingRef.current = true;
       setIsSelecting(true);
       setSelectionStart(clickedWord);
       const startIndex = pageLayoutRef.current.words.findIndex(w => 
@@ -348,7 +351,8 @@ const BookReader = () => {
   const handleCanvasMouseMove = useCallback((e) => {
     if (!isSelecting || !selectionStart) return;
     
-    if (Date.now() - lastMoveTimeRef.current < 50) return;
+    // Throttling más agresivo durante selección activa
+    if (Date.now() - lastMoveTimeRef.current < 150) return;
     lastMoveTimeRef.current = Date.now();
     
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY);
@@ -369,14 +373,37 @@ const BookReader = () => {
           ? [startIndex, currentIndex] 
           : [currentIndex, startIndex];
         
-        setSelectedWordRange({ first, last });
-        requestAnimationFrame(drawPage);
+        // Solo actualizar si hay cambio real en la selección
+        if (selectedWordRange.first !== first || selectedWordRange.last !== last) {
+          setSelectedWordRange({ first, last });
+          
+          // Cancelar renders anteriores y usar un delay más largo
+          if (selectionRenderRef.current) {
+            clearTimeout(selectionRenderRef.current);
+          }
+          
+          // Delay más largo durante selección activa para reducir parpadeo
+          selectionRenderRef.current = setTimeout(() => {
+            if (isActivelySelectingRef.current) {
+              drawPage();
+            }
+          }, 50);
+        }
       }
     }
-  }, [isSelecting, selectionStart, getCanvasCoordinates, findWordAtPosition, drawPage]);
+  }, [isSelecting, selectionStart, getCanvasCoordinates, findWordAtPosition, drawPage, selectedWordRange]);
 
   // Manejador mouse up
   const handleCanvasMouseUp = useCallback((e) => {
+    // Marcar que ya no estamos seleccionando activamente
+    isActivelySelectingRef.current = false;
+    
+    // Cancelar cualquier render pendiente de selección
+    if (selectionRenderRef.current) {
+      clearTimeout(selectionRenderRef.current);
+      selectionRenderRef.current = null;
+    }
+    
     if (!isSelecting || !selectionStart) {
       handleSingleWordClick(e.clientX, e.clientY);
       return;
@@ -412,7 +439,10 @@ const BookReader = () => {
     setIsSelecting(false);
     setSelectionStart(null);
     setCurrentMousePosition(null);
-  }, [isSelecting, selectionStart, getCanvasCoordinates, findWordAtPosition, handleSingleWordClick]);
+    
+    // Render final inmediato al terminar selección
+    drawPage();
+  }, [isSelecting, selectionStart, getCanvasCoordinates, findWordAtPosition, handleSingleWordClick, drawPage]);
 
   // =========================
   // MANEJADORES DE EVENTOS TÁCTILES
@@ -433,6 +463,7 @@ const BookReader = () => {
     });
     
     if (touchedWord) {
+      isActivelySelectingRef.current = true;
       setSelectionStart(touchedWord);
       const startIndex = pageLayoutRef.current.words.findIndex(w => 
         w.x === touchedWord.x && w.y === touchedWord.y && w.word === touchedWord.word
@@ -463,6 +494,7 @@ const BookReader = () => {
       if (deltaY > deltaX * 1.2) {
         if (!isScrolling) {
           setIsScrolling(true);
+          isActivelySelectingRef.current = false;
           
           if (isSelecting) {
             setIsSelecting(false);
@@ -478,6 +510,10 @@ const BookReader = () => {
     }
     
     if (touchStartPosition.word && !isScrolling) {
+      // Throttling más agresivo para táctil
+      if (Date.now() - lastMoveTimeRef.current < 200) return;
+      lastMoveTimeRef.current = Date.now();
+      
       const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
       const currentWord = findWordAtPosition(x, y);
       
@@ -494,14 +530,37 @@ const BookReader = () => {
           ? [startIndex, currentIndex] 
           : [currentIndex, startIndex];
         
-        setSelectedWordRange({ first, last });
-        requestAnimationFrame(drawPage);
+        // Solo actualizar si hay cambio real en la selección
+        if (selectedWordRange.first !== first || selectedWordRange.last !== last) {
+          setSelectedWordRange({ first, last });
+          
+          // Cancelar renders anteriores
+          if (selectionRenderRef.current) {
+            clearTimeout(selectionRenderRef.current);
+          }
+          
+          // Delay mayor para táctil para mejor estabilidad
+          selectionRenderRef.current = setTimeout(() => {
+            if (isActivelySelectingRef.current) {
+              drawPage();
+            }
+          }, 75);
+        }
         e.preventDefault();
       }
     }
-  }, [touchStartPosition, isScrolling, isSelecting, calculateDistance, getCanvasCoordinates, findWordAtPosition, drawPage]);
+  }, [touchStartPosition, isScrolling, isSelecting, calculateDistance, getCanvasCoordinates, findWordAtPosition, drawPage, selectedWordRange]);
 
   const handleCanvasTouchEnd = useCallback((e) => {
+    // Marcar que ya no estamos seleccionando activamente
+    isActivelySelectingRef.current = false;
+    
+    // Cancelar cualquier render pendiente de selección
+    if (selectionRenderRef.current) {
+      clearTimeout(selectionRenderRef.current);
+      selectionRenderRef.current = null;
+    }
+    
     if (!touchStartPosition || isScrolling) {
       setIsScrolling(false);
       setTouchStartPosition(null);
@@ -542,7 +601,10 @@ const BookReader = () => {
     setIsSelecting(false);
     setTouchStartPosition(null);
     setIsScrolling(false);
-  }, [touchStartPosition, isScrolling, isSelecting, handleSingleWordClick, getCanvasCoordinates, findWordAtPosition]);
+    
+    // Render final inmediato al terminar selección
+    drawPage();
+  }, [touchStartPosition, isScrolling, isSelecting, handleSingleWordClick, getCanvasCoordinates, findWordAtPosition, drawPage]);
 
   // =========================
   // MANEJADORES DE AUDIO
