@@ -40,12 +40,18 @@ const PDFViewer = () => {
         ref={containerRef}
         onScroll={handleScroll}
         className="relative mt-4 overflow-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg"
-        style={{ height: 'calc(100vh - 250px)' }}
+        style={{ 
+          height: `calc(100vh - 250px)`,
+          minHeight: `${Math.max(500, (zoom / 100) * 1200)}px` // Aumentado de 400/600 a 500/800
+        }}
       >
         <div 
           style={{ 
             transform: `scale(${zoom / 100})`,
             transformOrigin: 'top left',
+            minHeight: `${Math.max(100, (zoom / 100) * 150)}%`, // Aumentado para más espacio vertical
+            width: `${Math.max(100, (zoom / 100) * 120)}%`, // Aumentado para más espacio horizontal
+            paddingBottom: `${Math.max(50, (zoom / 100) * 100)}px` // Padding adicional en la parte inferior
           }}
           className="transition-transform duration-200"
         >
