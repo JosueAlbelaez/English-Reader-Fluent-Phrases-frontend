@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Volume2, X } from 'lucide-react';
 import axios from 'axios';
 
@@ -6,6 +6,8 @@ const TranslationModal = ({ word, position, onClose }) => {
   const [translation, setTranslation] = useState('');
   const [loading, setLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [modalPosition, setModalPosition] = useState(position);
+  const modalRef = useRef(null);
 
   useEffect(() => {
     const translateWord = async () => {
@@ -61,12 +63,64 @@ const TranslationModal = ({ word, position, onClose }) => {
     window.speechSynthesis.speak(utterance);
   };
 
+  // Función para actualizar la posición del modal basada en el scroll
+  const updateModalPosition = () => {
+    if (!modalRef.current) return;
+    
+    const scrollContainer = document.querySelector('.overflow-auto'); // El contenedor con scroll del PDFViewer
+    if (!scrollContainer) return;
+    
+    const scrollTop = scrollContainer.scrollTop;
+    const scrollLeft = scrollContainer.scrollLeft;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    
+    // Calcular nueva posición ajustada al scroll - CORREGIDO
+    // La posición original ya incluye el scroll, así que necesitamos mantener la posición relativa
+    const newY = Math.max(
+      containerRect.top + 10, // Mínimo 10px desde el top del contenedor visible
+      Math.min(
+        containerRect.top + (position.y - scrollTop), // Posición relativa al contenedor visible
+        window.innerHeight - 220 // Máximo para que no se salga por abajo de la ventana
+      )
+    );
+    
+    const newX = Math.max(
+      containerRect.left + 10, // Mínimo 10px desde la izquierda del contenedor
+      Math.min(
+        containerRect.left + (position.x - scrollLeft), // Posición relativa al contenedor visible
+        window.innerWidth - 320 // Máximo para que no se salga por la derecha de la ventana
+      )
+    );
+    
+    setModalPosition({ x: newX, y: newY });
+  };
+
+  useEffect(() => {
+    // Actualizar posición inicial
+    updateModalPosition();
+    
+    // Escuchar eventos de scroll
+    const scrollContainer = document.querySelector('.overflow-auto');
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', updateModalPosition, { passive: true });
+      window.addEventListener('resize', updateModalPosition, { passive: true });
+    }
+    
+    return () => {
+      if (scrollContainer) {
+        scrollContainer.removeEventListener('scroll', updateModalPosition);
+        window.removeEventListener('resize', updateModalPosition);
+      }
+    };
+  }, [position]); // Añadir dependencia de position para recalcular cuando cambie
+
   return (
     <div
-      className="fixed z-50 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700"
+      ref={modalRef}
+      className="fixed z-50 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 transition-all duration-150 ease-out"
       style={{
-        top: `${Math.min(position.y, window.innerHeight - 200)}px`,
-        left: `${Math.min(position.x, window.innerWidth - 300)}px`,
+        top: `${modalPosition.y}px`,
+        left: `${modalPosition.x}px`,
         minWidth: '200px',
         maxWidth: '300px'
       }}

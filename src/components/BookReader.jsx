@@ -60,11 +60,11 @@ const BookReader = () => {
   const {
     currentBook,
     currentPage,
+    setCurrentPage,
     fontSize,
     setFontSize,
     nextPage,
-    previousPage,
-    setCurrentPage
+    previousPage
   } = useBook();
 
   const currentPageText = currentBook?.content?.find(p => p.pageNumber === currentPage)?.text || '';
